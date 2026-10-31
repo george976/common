@@ -94,7 +94,7 @@ async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTo
 }
 
 // ============================================
-// 1) Per-answer check: does the answer make sense?
+// 1) Per-answer check + clarifying questions
 // ============================================
 
 const EVALUATION_SCHEMA = {
@@ -103,7 +103,15 @@ const EVALUATION_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['makes_sense', 'relevance', 'quality', 'comment'],
+    required: [
+      'makes_sense',
+      'relevance',
+      'quality',
+      'proceed',
+      'comment',
+      'clarifying_question',
+      'candidate_name',
+    ],
     properties: {
       makes_sense: {
         type: 'boolean',
@@ -114,40 +122,86 @@ const EVALUATION_SCHEMA = {
         enum: ['on_topic', 'partially_on_topic', 'off_topic', 'unclear'],
       },
       quality: { type: 'number', description: 'Answer quality from 1 to 5' },
+      proceed: {
+        type: 'boolean',
+        description:
+          'True if the answer is good enough to move on to the next question. False if the interviewer must ask a clarifying question first.',
+      },
       comment: {
         type: 'string',
         description:
-          'What the interviewer says out loud next: 1-2 short spoken sentences, max 40 words, plain text, no emojis, no new question',
+          'What the interviewer says out loud: a short spoken reaction to the answer. Plain text, no emojis, no new interview question.',
+      },
+      clarifying_question: {
+        type: 'string',
+        description:
+          'One short, friendly follow-up question asking for what is missing. Empty string when proceed is true.',
+      },
+      candidate_name: {
+        type: 'string',
+        description: 'The candidate\'s first name if they stated it in the answer, otherwise an empty string.',
       },
     },
   },
 };
 
 const EVALUATION_PROMPT = `You are Ava, a warm, professional AI interviewer.
-You just asked a candidate one interview question and they gave an answer.
+You asked a candidate one question and they answered. The answer text may combine several attempts:
+if you asked a clarifying question earlier, the candidate's follow-up is appended to the earlier answer.
 
-First decide whether the answer makes sense: is it coherent, relevant to the question, and meaningful?
-- If it is gibberish, off-topic, contradictory, or does not address the question, set makes_sense=false
-  and kindly say what was missing or unclear (for example, no example, no result, not relevant).
-- If it is on-topic but vague or very short, makes_sense can be true, but say what detail would make it stronger.
-- If it is good, acknowledge one specific thing the candidate said.
+Decide whether the candidate gave a proper answer, then set "proceed".
 
-Rules for "comment":
-- It is spoken aloud, so use natural, conversational English in plain text.
-- 1-2 sentences, maximum 40 words.
-- Refer to something specific from the answer.
-- Do NOT ask the next question, do NOT mention scores, and do NOT use emojis or markdown.
-- Never invent details the candidate did not say.`;
+GENERAL RULES
+- Be natural and conversational. Your words are spoken aloud: plain text, no emojis, no markdown.
+- Never ask the next interview question. Never mention scores. Never invent details the candidate did not say.
+- Ask at most ONE clarifying question, and only for what is actually missing.
+- If the answer is vague but a genuine attempt, set proceed=true and use "comment" to say what extra detail would make it stronger.
+
+WHEN category is "Introduction"
+- A proper introduction includes (1) the candidate's NAME and (2) at least some background or their current role.
+  What they are looking for next is nice to have but not required.
+- If the NAME is missing, proceed=false and politely ask for their name (and whatever else is missing, in one question).
+- If the name is given but there is no background or current role, proceed=false and ask about their background or current role.
+- If the intro is complete, proceed=true and greet them warmly by first name in "comment" (max 30 words).
+- Always fill "candidate_name" with the first name when it was stated, otherwise "".
+
+FOR ALL OTHER CATEGORIES
+- proceed=false (and makes_sense=false where relevant) when the answer is gibberish, a refusal or non-answer
+  (e.g. "idk", "ok", "no idea"), clearly off-topic, contradictory, or does not attempt the question.
+  Then ask ONE specific clarifying question that helps them answer, such as asking for a concrete example,
+  their role in it, or what result it had.
+- proceed=true when they genuinely attempt the question, even if imperfectly.
+- When proceed=true, "comment" is 1-2 sentences (max 40 words) that reference something specific from the answer.
+
+WHEN proceed=false
+- "comment" is a very short, kind reaction (max 15 words) that says what was missing, without scolding.
+- "clarifying_question" is the single follow-up question.
+- When proceed=true, "clarifying_question" must be an empty string.
+
+ATTEMPT LIMIT
+- You are told the current attempt number and the maximum number of clarifications.
+  If attempt >= max, you MUST set proceed=true, give a short, kind comment, and leave "clarifying_question" empty.`;
 
 /**
  * POST /api/evaluate-answer
- * Body: { "category": "Product", "question": "...", "answer": "..." }
+ * Body: {
+ *   "category": "Introduction" | "Product" | ...,
+ *   "question": "...",
+ *   "answer": "...",            // may include earlier attempts appended
+ *   "attempt": 0,               // how many clarifications were already asked
+ *   "maxAttempts": 2            // optional, default 2
+ * }
  */
 app.post('/api/evaluate-answer', async (req, res, next) => {
   try {
     const category = cleanText(req.body?.category, 100) || 'General';
     const question = cleanText(req.body?.question);
     const answer = cleanText(req.body?.answer);
+
+    const attemptRaw = Number(req.body?.attempt);
+    const maxRaw = Number(req.body?.maxAttempts);
+    const attempt = Number.isFinite(attemptRaw) && attemptRaw >= 0 ? Math.floor(attemptRaw) : 0;
+    const maxAttempts = Number.isFinite(maxRaw) && maxRaw >= 0 ? Math.min(Math.floor(maxRaw), 5) : 2;
 
     if (!question || !answer) {
       return res.status(400).json({
@@ -158,11 +212,27 @@ app.post('/api/evaluate-answer', async (req, res, next) => {
 
     const { data, model } = await askOpenAIForJson({
       system: EVALUATION_PROMPT,
-      user: `Category: ${category}\n\nQuestion: ${question}\n\nCandidate's answer: ${answer}`,
+      user:
+        `Category: ${category}\n` +
+        `Current attempt: ${attempt} (maximum clarifications allowed: ${maxAttempts})\n\n` +
+        `Question: ${question}\n\n` +
+        `Candidate's answer: ${answer}`,
       schema: EVALUATION_SCHEMA,
       temperature: 0.4,
-      maxTokens: 250,
+      maxTokens: 300,
     });
+
+    // Safety net: never trap the candidate in an endless loop.
+    if (attempt >= maxAttempts) {
+      data.proceed = true;
+      data.clarifying_question = '';
+    }
+    // Consistency: proceeding means there is nothing left to clarify.
+    if (data.proceed) {
+      data.clarifying_question = '';
+    } else if (!data.clarifying_question) {
+      data.clarifying_question = 'Could you tell me a bit more about that?';
+    }
 
     return res.status(200).json({ success: true, model, evaluation: data });
   } catch (err) {
@@ -294,6 +364,7 @@ const ANALYSIS_SCHEMA = {
 const ANALYSIS_PROMPT = `You are an expert interview coach and hiring consultant.
 You will receive a candidate's interview questions and their answers across areas such as
 Product, Business, AI Fluency, Technology, Marketing and Sales. The first item may be a short introduction.
+Answers may include earlier attempts plus follow-ups made after the interviewer asked a clarifying question.
 
 Analyze ONLY what is in the answers. Do not invent experience the candidate did not mention.
 Be specific, honest and constructive. Reference concrete details from the answers as evidence.
