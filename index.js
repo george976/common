@@ -54,6 +54,19 @@ function cleanText(value, max = MAX_TEXT_LENGTH) {
 }
 
 /**
+ * Removes any sentence that ends with a question mark.
+ * The interviewer's "comment" must never contain a question, so the candidate
+ * is never asked two things at once.
+ */
+function stripQuestions(text) {
+  const sentences = (typeof text === 'string' ? text : '').match(/[^.!?]+[.!?]*/g) || [];
+  return sentences
+    .filter((s) => !/\?\s*$/.test(s.trim()))
+    .join('')
+    .trim();
+}
+
+/**
  * Calls OpenAI with a strict JSON schema and returns the parsed object.
  */
 async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTokens }) {
@@ -153,6 +166,10 @@ Decide whether the candidate gave a proper answer, then set "proceed".
 
 GENERAL RULES
 - Be natural and conversational. Your words are spoken aloud: plain text, no emojis, no markdown.
+- "comment" must NEVER contain a question and must never end with a question mark. It is a statement only.
+  Questions belong only in "clarifying_question", and only when proceed=false.
+  When proceed=true, do not ask anything at all (no follow-ups like "What other sources do you use?"),
+  because the interviewer will move straight on to the next interview question.
 - Never ask the next interview question. Never mention scores. Never invent details the candidate did not say.
 - Ask at most ONE clarifying question, and only for what is actually missing.
 - If the answer is vague but a genuine attempt, set proceed=true and use "comment" to say what extra detail would make it stronger.
@@ -221,6 +238,9 @@ app.post('/api/evaluate-answer', async (req, res, next) => {
       temperature: 0.4,
       maxTokens: 300,
     });
+
+    // The comment is a statement only. Questions belong in "clarifying_question".
+    data.comment = stripQuestions(data.comment) || 'Thanks for sharing that.';
 
     // Safety net: never trap the candidate in an endless loop.
     if (attempt >= maxAttempts) {
