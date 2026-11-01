@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 // Speech settings (all use the SAME OPENAI_API_KEY)
-const STT_MODEL = process.env.OPENAI_STT_MODEL || 'whisper-1'; // or 'gpt-4o-mini-transcribe'
+const STT_MODEL = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe'; // most accurate. Falls back to 'whisper-1' automatically
 const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1'; // or 'tts-1-hd' / 'gpt-4o-mini-tts'
 const DEFAULT_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
 const TTS_INSTRUCTIONS =
@@ -207,22 +207,33 @@ app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, re
 
     const file = await OpenAI.toFile(req.file.buffer, `speech.${ext}`, { type: mime || 'audio/webm' });
 
+    // Try the configured model first; fall back to whisper-1 if the account can't use it
+    const models = STT_MODEL === 'whisper-1' ? ['whisper-1'] : [STT_MODEL, 'whisper-1'];
     let result;
-    try {
-      result = await openai.audio.transcriptions.create({
-        file,
-        model: STT_MODEL,
-        response_format: 'json',
-        temperature: 0,
-        ...(language ? { language } : {}),
-        ...(prompt ? { prompt } : {}),
-      });
-    } catch (err) {
-      throw mapOpenAIError(err, 'transcription');
+    let usedModel = STT_MODEL;
+    let lastErr;
+    for (const m of models) {
+      try {
+        result = await openai.audio.transcriptions.create({
+          file,
+          model: m,
+          response_format: 'json',
+          temperature: 0,
+          ...(language ? { language } : {}),
+          ...(prompt ? { prompt } : {}),
+        });
+        usedModel = m;
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (![400, 403, 404].includes(err && err.status)) break; // only fall back on "model not available"-type errors
+        console.warn(`Transcription with ${m} failed (${err.status}): ${err.message}`);
+      }
     }
+    if (!result) throw mapOpenAIError(lastErr, 'transcription');
 
     const text = (typeof result === 'string' ? result : result?.text || '').trim();
-    return res.status(200).json({ success: true, text, model: STT_MODEL });
+    return res.status(200).json({ success: true, text, model: usedModel });
   } catch (err) {
     next(err);
   }
@@ -336,6 +347,10 @@ GENERAL RULES
   Questions belong only in "clarifying_question", and only when proceed=false.
   When proceed=true, do not ask anything at all (no follow-ups like "What other sources do you use?"),
   because the interviewer will move straight on to the next interview question.
+- If a word or phrase makes no sense in context (for example "centipede of a group of people" where "sample" was
+  likely meant), it is probably a speech-to-text error, not the candidate's fault. Do not blame them.
+  Judge the rest of the answer. If the meaning is still unclear because of such errors, set proceed=false, say
+  "I may have misheard that" in the comment, and ask them to repeat or rephrase just the unclear part.
 - Never ask the next interview question. Never mention scores. Never invent details the candidate did not say.
 - Ask at most ONE clarifying question, and only for what is actually missing.
 - If the answer is vague but a genuine attempt, set proceed=true and use "comment" to say what extra detail would make it stronger.
