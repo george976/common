@@ -7,16 +7,14 @@ const multer = require('multer');
 const OpenAI = require('openai');
 
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', 1); // correct client IPs behind Render / proxies (used by the rate limiter)
 
 const PORT = process.env.PORT || 3000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-// ---- Speech settings ----
-// 1) Shift to the new standard model: gpt-transcribe (falls back automatically)
-const STT_MODEL = process.env.OPENAI_STT_MODEL || 'gpt-transcribe';
-const STT_FALLBACKS = ['gpt-transcribe', 'gpt-4o-transcribe', 'whisper-1'];
-const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1';
+// Speech settings (all use the SAME OPENAI_API_KEY)
+const STT_MODEL = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe'; // most accurate. Falls back to 'whisper-1' automatically
+const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1'; // or 'tts-1-hd' / 'gpt-4o-mini-tts'
 const DEFAULT_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
 const TTS_INSTRUCTIONS =
   process.env.OPENAI_TTS_INSTRUCTIONS ||
@@ -29,7 +27,7 @@ if (!process.env.OPENAI_API_KEY) {
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  timeout: 60 * 1000,
+  timeout: 60 * 1000, // 60s
 });
 
 // ============================================
@@ -37,7 +35,7 @@ const openai = new OpenAI({
 // ============================================
 
 app.use(cors({
-  origin: '*',
+  origin: '*', // Change to specific origin(s) in production, e.g. ['https://yourdomain.com']
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
@@ -50,11 +48,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Audio uploads are kept in memory (short spoken answers only)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 12 * 1024 * 1024, files: 1 }, // 12 MB is plenty for a few minutes of speech
 });
 
+/**
+ * Tiny in-memory rate limiter (per IP). Your API is public (CORS *), so this
+ * stops a stranger from burning through your OpenAI credits.
+ */
 function rateLimit({ windowMs, max }) {
   const hits = new Map();
   setInterval(() => {
@@ -99,6 +102,7 @@ function cleanText(value, max = MAX_TEXT_LENGTH) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
+/** Maps an OpenAI SDK error to a friendly HTTP error. */
 function mapOpenAIError(err, what) {
   if (err && err.status === 401) {
     return httpError(500, 'OpenAI authentication failed. Check OPENAI_API_KEY on the server.');
@@ -114,6 +118,11 @@ function mapOpenAIError(err, what) {
   return httpError(502, 'Could not reach the AI service. Please try again.');
 }
 
+/**
+ * Removes any sentence that ends with a question mark.
+ * The interviewer's "comment" must never contain a question, so the candidate
+ * is never asked two things at once.
+ */
 function stripQuestions(text) {
   const sentences = (typeof text === 'string' ? text : '').match(/[^.!?]+[.!?]*/g) || [];
   return sentences
@@ -122,6 +131,9 @@ function stripQuestions(text) {
     .trim();
 }
 
+/**
+ * Calls OpenAI with a strict JSON schema and returns the parsed object.
+ */
 async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTokens }) {
   if (!process.env.OPENAI_API_KEY) {
     throw httpError(500, 'Server is missing OPENAI_API_KEY.');
@@ -154,7 +166,7 @@ async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTo
 }
 
 // ============================================
-// 0) Speech: transcription + text-to-speech
+// 0) Speech: Whisper transcription + OpenAI text-to-speech
 // ============================================
 
 const MIME_TO_EXT = {
@@ -177,11 +189,6 @@ const MIME_TO_EXT = {
  *   language: optional ISO-639-1 code, e.g. "en" (improves accuracy and speed)
  *   prompt:   optional short vocabulary hint (max 200 chars)
  * Returns { success, text, model }
- *
- * Improvements:
- * 1) Uses gpt-transcribe by default (new standard), with fallbacks.
- * 2) Forces temperature to 0.2 for deterministic output.
- * 3) Always passes an explicit language (defaults to "en") to bypass auto-detect.
  */
 app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, res, next) => {
   try {
@@ -195,57 +202,37 @@ app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, re
 
     const mime = String(req.file.mimetype || '').split(';')[0].toLowerCase();
     const ext = MIME_TO_EXT[mime] || 'webm';
-
-    // Improvement 3: Explicit language context (ISO-639-1). Defaults to "en".
-    const requestedLang = String(req.body?.language || '').trim().toLowerCase();
-    const language = /^[a-z]{2}$/.test(requestedLang) ? requestedLang : 'en';
-
+    const language = /^[a-z]{2}$/i.test(String(req.body?.language || '')) ? req.body.language.toLowerCase() : undefined;
     const prompt = cleanText(req.body?.prompt, 200) || undefined;
 
     const file = await OpenAI.toFile(req.file.buffer, `speech.${ext}`, { type: mime || 'audio/webm' });
 
-    // Improvement 1: Shift to the new standard model (gpt-transcribe), with fallbacks.
-    let modelsToTry;
-    if (STT_MODEL === 'whisper-1') {
-      modelsToTry = ['whisper-1'];
-    } else {
-      // Start from the configured model, then fill in any missing fallbacks.
-      modelsToTry = [STT_MODEL, ...STT_FALLBACKS.filter((m) => m !== STT_MODEL)];
-    }
-
+    // Try the configured model first; fall back to whisper-1 if the account can't use it
+    const models = STT_MODEL === 'whisper-1' ? ['whisper-1'] : [STT_MODEL, 'whisper-1'];
     let result;
-    let usedModel = null;
+    let usedModel = STT_MODEL;
     let lastErr;
-
-    for (const m of modelsToTry) {
+    for (const m of models) {
       try {
-        // Build params. gpt-transcribe and gpt-4o-transcribe accept `language` and `temperature`.
-        const params = {
+        result = await openai.audio.transcriptions.create({
           file,
           model: m,
           response_format: 'json',
-          // Improvement 2: Force temperature down for deterministic output.
-          temperature: 0.2,
-          language,
+          temperature: 0,
+          ...(language ? { language } : {}),
           ...(prompt ? { prompt } : {}),
-        };
-
-        result = await openai.audio.transcriptions.create(params);
+        });
         usedModel = m;
         break;
       } catch (err) {
         lastErr = err;
-        // Only fall back on "model not available" or parameter rejection errors.
-        if (![400, 403, 404].includes(err && err.status)) break;
+        if (![400, 403, 404].includes(err && err.status)) break; // only fall back on "model not available"-type errors
         console.warn(`Transcription with ${m} failed (${err.status}): ${err.message}`);
       }
     }
-
     if (!result) throw mapOpenAIError(lastErr, 'transcription');
 
     const text = (typeof result === 'string' ? result : result?.text || '').trim();
-    console.log(`Transcribed ${req.file.size} bytes with ${usedModel} (lang=${language}, temp=0.2): "${text.slice(0, 80)}"`);
-
     return res.status(200).json({ success: true, text, model: usedModel });
   } catch (err) {
     next(err);
@@ -275,6 +262,7 @@ app.post('/api/speak', audioLimiter, async (req, res, next) => {
         voice,
         input: text,
         response_format: 'mp3',
+        // "instructions" is only supported by the gpt-4o-*-tts models
         ...(TTS_MODEL.startsWith('gpt-4o') ? { instructions: TTS_INSTRUCTIONS } : {}),
       });
     } catch (err) {
@@ -392,6 +380,16 @@ ATTEMPT LIMIT
 - You are told the current attempt number and the maximum number of clarifications.
   If attempt >= max, you MUST set proceed=true, give a short, kind comment, and leave "clarifying_question" empty.`;
 
+/**
+ * POST /api/evaluate-answer
+ * Body: {
+ *   "category": "Introduction" | "Product" | ...,
+ *   "question": "...",
+ *   "answer": "...",            // may include earlier attempts appended
+ *   "attempt": 0,               // how many clarifications were already asked
+ *   "maxAttempts": 2            // optional, default 2
+ * }
+ */
 app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
   try {
     const category = cleanText(req.body?.category, 100) || 'General';
@@ -422,12 +420,15 @@ app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
       maxTokens: 300,
     });
 
+    // The comment is a statement only. Questions belong in "clarifying_question".
     data.comment = stripQuestions(data.comment) || 'Thanks for sharing that.';
 
+    // Safety net: never trap the candidate in an endless loop.
     if (attempt >= maxAttempts) {
       data.proceed = true;
       data.clarifying_question = '';
     }
+    // Consistency: proceeding means there is nothing left to clarify.
     if (data.proceed) {
       data.clarifying_question = '';
     } else if (!data.clarifying_question) {
@@ -441,7 +442,7 @@ app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
 });
 
 // ============================================
-// 2) Full interview analysis
+// 2) Full interview analysis (strengths & weaknesses)
 // ============================================
 
 function validateInterviewPayload(body) {
@@ -473,6 +474,7 @@ function validateInterviewPayload(body) {
       return { error: `responses[${i}] exceeds the ${MAX_TEXT_LENGTH} character limit.` };
     }
 
+    // Optional: the per-answer check the interviewer already did
     const fb = item.feedback && typeof item.feedback === 'object' ? item.feedback : null;
 
     cleaned.push({
@@ -580,6 +582,13 @@ Return:
 
 If an answer is very short or vague, say so and score it accordingly.`;
 
+/**
+ * POST /api/analyze
+ * Body: {
+ *   "candidate": { "name": "Priya" },   // optional
+ *   "responses": [ { "category": "Product", "question": "...", "answer": "...", "feedback": {...} } ]
+ * }
+ */
 app.post('/api/analyze', aiLimiter, async (req, res, next) => {
   try {
     const { error, value } = validateInterviewPayload(req.body);
@@ -618,7 +627,10 @@ app.post('/api/analyze', aiLimiter, async (req, res, next) => {
 // ============================================
 
 app.get('/', (req, res) => {
-  res.json({ success: true, message: 'hi..' });
+  res.json({
+    success: true,
+    message: 'hi..',
+  });
 });
 
 app.get('/api/hi', (req, res) => {
@@ -631,19 +643,29 @@ app.get('/api/hi', (req, res) => {
 });
 
 app.post('/api/echo', (req, res) => {
-  res.status(200).json({ success: true, received: req.body });
+  res.status(200).json({
+    success: true,
+    received: req.body,
+  });
 });
 
 // ============================================
-// 404 + Error handlers
+// 404 Handler
 // ============================================
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: 'Route not found' });
+  res.status(404).json({
+    success: false,
+    message: 'Route not found',
+  });
 });
 
+// ============================================
+// Global Error Handler
+// ============================================
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack || err);
 
+  // Upload problems (file too large, unexpected field, ...)
   if (err && err.name === 'MulterError') {
     const tooBig = err.code === 'LIMIT_FILE_SIZE';
     return res.status(tooBig ? 413 : 400).json({
