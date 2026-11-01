@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AI Interviewer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@300;500&display=swap">
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#1d1d1b;--mut:#6b6a64;--line:#e4e2da;--acc:#4f46e5;--acc2:#e8e6ff;--ok:#16a34a;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121214;--card:#1c1c20;--ink:#f1f0ec;--mut:#9a99a3;--line:#2c2c33;--acc:#8b85ff;--acc2:#2a2850;--ok:#4ade80;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#121214;--card:#1c1c20;--ink:#f1f0ec;--mut:#9a99a3;--line:#2c2c33;--acc:#8b85ff;--acc2:#2a2850;--ok:#4ade80;color-scheme:dark}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+h1{font-size:20px;margin:0}h1 span{color:var(--acc)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:12px;padding:3px 10px;border-radius:99px;border:1px solid var(--line);color:var(--mut);background:var(--card)}
+.chip.on{background:var(--acc);color:#fff;border-color:var(--acc)}.chip.done{border-color:var(--ok);color:var(--ok)}
+.grid{display:grid;grid-template-columns:1.1fr 1fr;gap:14px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px}
+.videos{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tile{position:relative;aspect-ratio:4/3;border-radius:12px;overflow:hidden;background:#15151a;display:flex;align-items:center;justify-content:center;color:#cfcfd8}
+.tile .lbl{position:absolute;left:8px;bottom:8px;font-size:11px;background:rgba(0,0,0,.55);color:#fff;padding:2px 8px;border-radius:99px}
+.tile video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.ring{position:absolute;inset:0;border:3px solid transparent;border-radius:12px;pointer-events:none}
+.speaking .ring{border-color:var(--acc)}
+#aiVideo{background:radial-gradient(circle at 50% 45%,#1d1a45,#07070f 75%)}
+#aiVideo canvas{width:100%;height:100%;display:block}
+.wave{display:flex;gap:4px;align-items:center;height:60px}
+.wave i{width:6px;height:10px;border-radius:3px;background:#8b85ff;transition:height .1s}
+.speaking .wave i{animation:b .6s ease-in-out infinite alternate}
+.wave i:nth-child(2n){animation-delay:.15s}.wave i:nth-child(3n){animation-delay:.3s}
+@keyframes b{to{height:52px}}
+.ctrl{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 12px;border-radius:10px}
+button:hover{border-color:var(--acc)}button.pri{background:var(--acc);color:#fff;border-color:var(--acc)}
+button.off{opacity:.65;text-decoration:line-through}
+.q{margin-top:12px;padding:12px;background:var(--acc2);border-radius:12px}
+.q small{color:var(--mut);display:block;margin-bottom:2px}
+.chat{height:300px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:2px}
+.m{max-width:88%;padding:8px 12px;border-radius:12px;font-size:14px}
+.m.ai{background:var(--acc2);align-self:flex-start}.m.me{background:var(--acc);color:#fff;align-self:flex-end}
+textarea{width:100%;min-height:76px;margin-top:10px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;resize:vertical}
+.row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden}.bar b{display:block;height:100%;background:var(--acc);border-radius:6px}
+.sc{display:grid;grid-template-columns:110px 1fr 36px;gap:10px;align-items:center;margin:8px 0}
+.rec{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:10px}
+.rec h4{margin:0 0 4px}.tag{font-size:11px;color:var(--ok);font-weight:600}
+.m.live{opacity:.7;font-style:italic}.rec-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#ef4444;margin-right:6px;animation:p 1s infinite alternate}@keyframes p{to{opacity:.2}}#intro{position:fixed;inset:0;z-index:50;background:#06060c;color:#fff;transition:opacity .7s}#intro.fade{opacity:0;pointer-events:none}#intro canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.vig{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.7));pointer-events:none}.lb{position:absolute;left:0;right:0;height:8vh;background:#000;z-index:2}.lb.t{top:0}.lb.b{bottom:0}
+.itop{position:absolute;z-index:4;right:12px;top:calc(env(safe-area-inset-top,0px) + 8vh + 10px);display:flex;gap:8px}.itop button{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.28);backdrop-filter:blur(6px)}
+.icapw{position:absolute;z-index:3;left:0;right:0;bottom:calc(8vh + 22px);text-align:center;padding:0 20px}#icap{font-family:"Cormorant Garamond",Georgia,"Times New Roman",serif;font-size:clamp(30px,6vw,64px);font-weight:500;letter-spacing:.03em;text-shadow:0 2px 30px rgba(0,0,0,.9)}#isub{font-family:Inter,system-ui,sans-serif;font-weight:300;font-size:clamp(11px,1.6vw,15px);letter-spacing:.22em;text-transform:uppercase;color:#e8d3a8;opacity:.92;margin-top:12px}
+.swap{animation:cap .9s ease both}@keyframes cap{from{opacity:0;transform:translateY(14px);filter:blur(6px)}to{opacity:1;transform:none;filter:none}}#iBegin{margin-top:22px;font:500 12px Inter,system-ui,sans-serif;letter-spacing:.22em;text-transform:uppercase;padding:14px 32px;border-radius:99px;background:linear-gradient(135deg,#f3dfb2,#c9a45c);color:#1a1405;border:0;box-shadow:0 8px 30px rgba(201,164,92,.35)}#ipg{position:absolute;z-index:4;left:0;bottom:0;height:3px;width:0;background:#8b85ff}
+.m.warn{border-left:3px solid #f59e0b}.spin{width:38px;height:38px;border:3px solid var(--line);border-top-color:var(--acc);border-radius:50%;margin:0 auto 14px;animation:sp 1s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}.two{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.two{grid-template-columns:1fr}}.big{font-size:44px;font-weight:700;color:var(--acc);line-height:1}.big small{font-size:16px;color:var(--mut)}.ov{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:6px}.ov p{flex:1;min-width:220px;margin:0}.mut{color:var(--mut)}
+select{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:7px 8px;border-radius:10px;max-width:180px}.hide{display:none}.note.err{color:#ef4444}.note{color:var(--mut);font-size:12px;margin-top:6px}
+#bInt{border-color:#ef4444;color:#ef4444}.chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--mut);padding:0 4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>🎙️ <span>AI</span> Interviewer</h1>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div id="interview" class="grid">
+  <section class="card">
+    <div class="videos">
+      <div class="tile" id="aiTile">
+        <div id="aiVideo" style="width:100%;height:100%"></div>
+        <div id="aiAudio" class="wave hide"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="ring"></div><span class="lbl">AI interviewer</span>
+      </div>
+      <div class="tile" id="meTile">
+        <video id="cam" autoplay muted playsinline class="hide"></video>
+        <div id="camOff" style="text-align:center;font-size:13px">📷 Camera off<br><small>Your video is private</small></div>
+        <span class="lbl">You</span>
+      </div>
+    </div>
+    <div class="ctrl">
+      <button id="bCam">📷 Turn camera on</button>
+      <button id="bMic">🎤 Start voice</button>
+      <button id="bInt" class="hide">✋ Interrupt</button>
+      <label class="chk"><input type="checkbox" id="autoSend" checked> Auto-send</label>
+      <select id="vSel" title="AI voice"><option value="nova">Voice: Nova</option><option value="shimmer">Shimmer</option><option value="alloy">Alloy</option><option value="echo">Echo</option><option value="fable">Fable</option><option value="onyx">Onyx</option></select>
+      <button id="bAiVid">🧑‍💼 Interviewer video: on</button>
+      <button id="bSound">🔊 Voice: on</button>
+      <button id="bReplay">🎬 Replay intro</button>
+      <button id="bTheme">🌓</button>
+    </div>
+    <div class="note" id="camNote"></div>
+    <div class="note" id="micMsg"></div>
+    <div class="q"><small id="qMeta">Question</small><div id="qText" style="font-weight:600"></div></div>
+  </section>
+
+  <section class="card">
+    <div class="chat" id="chat"></div>
+    <textarea id="ans" placeholder="Type your answer… or load a sample response"></textarea>
+    <div class="row">
+      <button id="bSample">✨ Use sample response</button>
+      <button class="pri" id="bSend">Send answer →</button>
+      <button id="bAuto" title="Plays the whole interview with sample answers">▶ Auto-demo</button>
+    </div>
+  </section>
+</div>
+
+<section id="report" class="card hide"></section>
+<div id="intro">
+  <div class="lb t"></div><div class="lb b"></div><div class="vig"></div>
+  <div class="itop"><button id="iSnd">🔇 Narration off</button><button id="iSkip">Skip ›</button></div>
+  <div class="icapw"><div id="icap"></div><div id="isub"></div><button class="pri hide" id="iBegin">Begin interview →</button></div>
+  <div id="ipg"></div>
+</div>
+</div>
+
+<script>
+const DOMAINS=[
+{k:"Product",ic:"🧩",q:"Tell me about a product you shaped. How did you decide what to build, and what did you deliberately leave out?",kw:["user","priorit","metric","roadmap","trade","research","launch","mvp"],
+ s:"I led a scheduling feature for freelancers. We interviewed 25 users, found double-booking was the top pain, and prioritised it using impact versus effort. I cut calendar themes and team views from the MVP. After launch, weekly retention rose 12% and support tickets fell by a third, so we reinvested in the roadmap around reliability."},
+{k:"Business",ic:"📈",q:"Imagine our subscription revenue is flat for two quarters. How would you diagnose it and what would you do first?",kw:["churn","revenue","cohort","margin","pricing","segment","unit","growth"],
+ s:"I’d split revenue into new, expansion and churn by cohort and segment. If churn is the leak, I’d fix onboarding before touching pricing. Then I’d check unit economics, CAC payback and margin by segment, and run a pricing test on the healthiest cohort."},
+{k:"AI Fluency",ic:"🤖",q:"How do you use AI in your daily work, and how do you judge when its output can’t be trusted?",kw:["prompt","llm","evaluate","hallucin","workflow","automat","verify","model","data"],
+ s:"I use LLMs for research synthesis, drafting and spreadsheet automation. I write structured prompts with examples, then verify claims against sources because models hallucinate. For team workflows I built a small evaluation set to compare models before rollout, and I keep humans in the loop for anything customer-facing."},
+{k:"Technology",ic:"⚙️",q:"Walk me through how you’d work with engineers to ship something technically complex under a tight deadline.",kw:["api","architecture","scal","debt","estimate","engineer","deploy","risk"],
+ s:"I’d align on scope with the tech lead, ask for estimates, and flag risks early. We’d split the work behind a feature flag, agree on the API contract first, and accept some tech debt with a ticket to repay it. I stay close to deploys so we can roll back quickly."},
+{k:"Marketing",ic:"📣",q:"How would you position and launch a new product to an audience that has never heard of us?",kw:["audience","position","channel","brand","content","funnel","message","campaign"],
+ s:"I’d define one sharp audience and a clear positioning message. Then pick two channels, such as content and communities, and measure the funnel from awareness to signup."},
+{k:"Sales",ic:"🤝",q:"A prospect says ‘you’re too expensive.’ Walk me through how you’d handle that conversation.",kw:["discover","value","objection","pipeline","close","stakeholder","roi","negotiat"],
+ s:"I’d pause and ask what they’re comparing us to, then revisit the pain we uncovered in discovery. I’d quantify ROI, bring in the economic stakeholder, and only negotiate on scope or term, never on value, to keep the pipeline healthy and close on fair terms."}
+];
+const BANK={
+Product:[
+["Tell me about a product you shaped. How did you decide what to build, and what did you deliberately leave out?","I led a scheduling feature. After 25 user interviews I prioritised double-booking fixes by impact versus effort, cut themes from the MVP, and retention rose 12% after launch."],
+["How do you prioritise a roadmap when stakeholders all say their request is urgent?","I score requests on user impact, strategic fit and effort, share the trade-off openly, and tie the roadmap to one metric so priorities stay defensible."],
+["Describe a feature that failed. What did you learn?","We shipped a dashboard nobody used. Research showed we skipped user discovery, so I now validate with prototypes and track a clear adoption metric before building."],
+["How do you define and measure product success?","I pick a north-star metric, such as weekly active teams, backed by activation and retention metrics, and review cohorts after every launch."],
+["How do you run user research when you have little time and budget?","I do five quick user interviews, review support tickets, and test a clickable prototype before committing engineering time to an MVP."],
+["Walk me through taking an idea from zero to launch.","I frame the problem, run research, define an MVP, align engineering on scope, launch to a small cohort, then iterate using metrics before a wider launch."],
+["How do you say no to a feature request from a senior executive?","I acknowledge the goal, show data on trade-offs against the roadmap, offer a cheaper experiment, and agree on a metric that would justify building it."],
+["What makes a great PRD or product spec?","It states the user problem, success metrics, scope and non-goals, with clear trade-offs and open questions, so engineering and design can move fast."],
+["How would you improve onboarding for a product losing users in week one?","I’d analyse the funnel to find the drop-off, interview churned users, test a shorter setup with an MVP checklist, and measure activation uplift."],
+["How do you balance new features with fixing technical debt?","I reserve roughly 20% of each cycle for debt, tie it to user metrics like speed and reliability, and explain the trade-off in roadmap terms."]],
+Business:[
+["Imagine our subscription revenue is flat for two quarters. How would you diagnose it and what would you do first?","I’d split revenue into new, expansion and churn by cohort and segment, fix churn through onboarding first, then test pricing and check margin and unit economics."],
+["How would you decide whether to enter a new market?","I’d size the segment, test demand with a small pilot, check unit economics and margin, and compare growth upside against the cost and risk."],
+["Walk me through how you’d evaluate unit economics for a product.","I’d compute CAC, lifetime revenue, gross margin and payback period by segment, then find which cohort is profitable and focus growth there."],
+["How do you approach pricing a new product?","I combine customer value research, competitor benchmarks and margin targets, test two price points with a segment, and watch conversion and revenue."],
+["Describe a time you made a decision with incomplete data.","I ran a small pilot to cut risk, defined the metric that would change my mind, and committed once early revenue signals were clear."],
+["How would you reduce customer churn?","I’d analyse churn by cohort, interview lost customers, improve onboarding, and launch a proactive retention workflow for at-risk segments."],
+["How do you build a business case for a new investment?","I model cost, expected revenue and margin under three scenarios, show payback and risks, and propose staged funding tied to metrics."],
+["What metrics would you put on a CEO dashboard?","Revenue growth, churn, CAC payback, gross margin, cash runway and pipeline by segment, so leadership sees growth and unit health together."],
+["How do you think about partnerships as a growth lever?","I look for partners sharing my audience, model the revenue split and margin, pilot one integration, and track referral growth before scaling."],
+["A competitor just undercut us on price. What do you do?","I check which segment is affected, compare value rather than price, protect margin, and test targeted pricing or bundles before any broad cut."]],
+"AI Fluency":[
+["How do you use AI in your daily work, and how do you judge when its output can’t be trusted?","I use an LLM for research and drafting, write structured prompts, verify claims against sources because of hallucination, and keep a human in the workflow."],
+["How would you evaluate whether an LLM is good enough for a customer-facing feature?","I’d build an evaluation set of real cases, compare models on accuracy and safety, measure hallucination rates, and add human review before launch."],
+["What is prompt engineering, and what techniques do you use?","It’s designing instructions so a model behaves reliably. I use clear roles, examples, structured output formats and step-by-step prompts, then test variations on real data."],
+["Explain hallucinations to a non-technical executive and how to mitigate them.","A model can state confident falsehoods. I reduce it by grounding answers in company data, requiring citations, verifying outputs and using human review."],
+["Where would AI not be the right solution?","When errors are costly, data is scarce, or a simple rule works. I compare model cost and risk against a basic workflow automation first."],
+["How would you design a workflow that automates support tickets with AI?","I’d classify tickets, draft replies from our knowledge base data, route low-confidence cases to humans, and evaluate quality weekly."],
+["How do you handle data privacy when using AI tools?","I avoid sending sensitive data to public models, use approved vendors with data controls, anonymise inputs, and verify compliance with the security team."],
+["What is RAG and when would you use it?","Retrieval-augmented generation fetches relevant company data and feeds it to the model, so answers are grounded. I use it for knowledge bases and to reduce hallucination."],
+["How do you stay current with fast-moving AI developments?","I follow model releases, test new tools on my own workflow, read evaluation benchmarks critically, and run small experiments before recommending adoption."],
+["How would you measure the ROI of an AI initiative?","I baseline the manual workflow, then measure time saved, quality via an evaluation set, and cost per task, and compare against model and rollout costs."]],
+Technology:[
+["Walk me through how you’d work with engineers to ship something technically complex under a tight deadline.","I align scope with the tech lead, get engineer estimates, flag risk early, agree the API first, ship behind a flag, and log any tech debt."],
+["Explain what an API is to a non-technical stakeholder.","An API is a contract that lets two systems talk, like a waiter taking orders to the kitchen. It lets partners integrate without seeing our internal architecture."],
+["How do you decide between building and buying a technical solution?","I compare cost, time to deploy, differentiation and risk. If it isn’t core, I buy; if it’s our edge, I build with an engineer estimate."],
+["How do you think about scalability early in a product’s life?","I avoid over-engineering, but choose an architecture that scales with load, monitor bottlenecks, and plan refactors as usage and risk grow."],
+["How do you handle a production outage?","I coordinate engineers, communicate clearly to stakeholders, prioritise a rollback or fix to restore service, then run a blameless review to cut risk."],
+["What’s your approach to managing technical debt?","I make it visible, estimate its cost to speed and risk, schedule a share of each sprint to repay it, and agree trade-offs with engineers."],
+["How would you explain cloud architecture trade-offs to leadership?","I frame choices in cost, speed, reliability and risk, show a simple architecture diagram, and recommend an option with an estimate of scale."],
+["How do you ensure data security in a product you manage?","I work with engineers on access controls, encryption and audits, review vendor risk, and include security requirements before deploy rather than after."],
+["What technical skills do you use most as a non-engineer?","I read API docs, write SQL for data questions, understand architecture diagrams, and review estimates with engineers to challenge scope and spot risk."],
+["How do you evaluate a new technology before adopting it?","I define the problem, prototype quickly, test scale and security risk, check cost, and have engineers review the architecture before a wider deploy."]],
+Marketing:[
+["How would you position and launch a new product to an audience that has never heard of us?","I’d define one sharp audience and a clear positioning message, pick two channels like content and communities, and measure the funnel from awareness to signup."],
+["How do you decide which marketing channels to invest in?","I test small campaigns across channels, compare cost per acquisition through the funnel, and double down on the channel where the audience converts best."],
+["How would you build a brand from scratch on a small budget?","I define a clear position and message, create useful content for one audience, build community, and measure brand search and funnel growth."],
+["Walk me through a campaign you ran and its results.","I ran a launch campaign with email and content, tested messages, tracked the funnel weekly, and cut acquisition cost by 30% over the campaign."],
+["How do you measure marketing effectiveness?","I track the funnel from visits to signups to revenue, attribute by channel, watch CAC and payback, and review each campaign against its goal."],
+["How would you write a value proposition for a B2B product?","I’d define the audience pain, state the outcome in one clear message, back it with proof, and test the position with customers."],
+["How do content and SEO fit into your growth strategy?","Content builds trust and compounding organic funnel traffic. I target audience questions, build topic clusters, and measure rankings and signups per channel."],
+["How do you approach customer segmentation?","I segment by need and behaviour using data and interviews, tailor the message per audience, and prioritise the segment with the best funnel economics."],
+["Tell me about a campaign that underperformed.","A campaign missed because the message didn’t fit the audience. I reviewed funnel data, interviewed customers, rewrote the positioning, and relaunched with better results."],
+["How would you work with sales to generate better leads?","I agree a lead definition with sales, tailor content and campaign messages to the buyer, and review funnel conversion together every week."]],
+Sales:[
+["A prospect says ‘you’re too expensive.’ Walk me through how you’d handle that conversation.","I’d ask what they’re comparing us to, revisit the pain from discovery, quantify ROI, involve the economic stakeholder, and negotiate scope not value."],
+["How do you structure a discovery call?","I open with their goals, ask about pain and impact, map stakeholders and the buying process, and confirm value before proposing any next step in the pipeline."],
+["How do you build and manage your pipeline?","I prospect weekly, qualify with clear criteria, review pipeline stages every week, and focus time on deals with real stakeholder access to close."],
+["Tell me about the biggest deal you closed.","It was a six-figure deal. I ran discovery, mapped stakeholders, built an ROI case, handled objection on security, and negotiated a fair term to close."],
+["How do you handle a stalled deal?","I re-engage the champion, find the blocker, reconfirm the value and ROI, bring in a new stakeholder if needed, and set a clear close date."],
+["How do you qualify a lead?","I check budget, authority, need and timing during discovery, confirm the pain and stakeholder involvement, and only advance real deals in the pipeline."],
+["How do you prepare for a negotiation?","I know my walk-away point, understand their stakeholder priorities and ROI, plan trades on scope and term, and protect value while closing fairly."],
+["How do you sell to a skeptical buyer?","I listen to the objection in discovery, use proof like case studies and ROI, offer a small pilot, and involve a trusted stakeholder to reduce risk."],
+["How do you work with customers after the deal closes?","I hand off with a clear success plan, check in on value delivered, spot expansion in the pipeline, and keep stakeholders happy to protect renewal."],
+["How do you hit quota in a slow quarter?","I audit the pipeline, prioritise deals nearest to close, run focused outbound discovery, offer value-based incentives, and negotiate timing with stakeholders."]]
+};
+DOMAINS.forEach(d=>{const p=BANK[d.k][Math.floor(Math.random()*BANK[d.k].length)];d.q=p[0];d.s=p[1]});
+const COMPANIES={
+Product:["Product-led SaaS scale-ups","Series B–D teams building self-serve products where PMs own outcomes (e.g. workflow, fintech and collaboration tools)."],
+Business:["High-growth startups & strategy-led firms","Seed–Series B startups and consultancies that need a commercially minded generalist across revenue, pricing and operations."],
+"AI Fluency":["AI-native startups & applied-AI teams","Companies building on LLMs, agents or automation, where practical AI judgement is a core hiring signal."],
+Technology:["Developer tools, infra & platform companies","Technical-product roles at API, cloud, data and security businesses that value engineering credibility."],
+Marketing:["Consumer brands & growth-stage D2C","Brand and growth teams in consumer apps, marketplaces and D2C companies with heavy top-of-funnel focus."],
+Sales:["B2B SaaS & enterprise sales-led companies","Revenue teams with complex deals, long cycles and multi-stakeholder buying (customer success and solutions roles too)."]};
+
+let i=0,scores=[],answers=[],voice=true,aiVid=true,stream=null,speaking=false,busy=false;
+const $=id=>document.getElementById(id);
+
+function chips(){$("chips").innerHTML=DOMAINS.map((d,n)=>`<span class="chip ${n<i?'done':n===i?'on':''}">${d.ic} ${d.k}</span>`).join("")}
+function add(role,t){const d=document.createElement("div");d.className="m "+role;d.textContent=t;$("chat").appendChild(d);$("chat").scrollTop=1e9}
+
+// ---- AI voice: OpenAI TTS via backend (browser voice as fallback), with barge-in ----
+const player=new Audio();player.preload="auto";
+let actx=null,playAn=null,sayId=0,ttsCtl=null,endCurrent=null,ttsWarned=false;
+const ttsCache=new Map();
+function ensureCtx(){
+  const AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;
+  if(!actx){try{actx=new AC();const src=actx.createMediaElementSource(player);playAn=actx.createAnalyser();playAn.fftSize=1024;src.connect(playAn);playAn.connect(actx.destination)}catch(e){console.warn("audio context",e);actx=null;playAn=null}}
+  if(actx&&actx.state==="suspended")actx.resume().catch(()=>{});
+}
+function setSpeaking(v){
+  speaking=v;$("aiTile").classList.toggle("speaking",v);$("bInt").classList.toggle("hide",!v);
+  if(micOn&&recState!=="recording")micStatus(v?"🔊 AI is speaking. Just start talking to interrupt.":"🎤 Listening… speak any time.");
+}
+async function fetchTTS(text,signal){
+  const vn=$("vSel").value,key=vn+"|"+text;
+  if(ttsCache.has(key))return ttsCache.get(key);
+  const r=await fetch(API_URL+"/api/speak",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,voice:vn}),signal});
+  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.message||("TTS failed ("+r.status+")"))}
+  const url=URL.createObjectURL(await r.blob());
+  if(ttsCache.size>40){const k=ttsCache.keys().next().value;URL.revokeObjectURL(ttsCache.get(k));ttsCache.delete(k)}
+  ttsCache.set(key,url);return url;
+}
+function ttsNote(err){
+  if(ttsWarned)return;ttsWarned=true;
+  const n=document.createElement("div");n.className="note err";
+  n.textContent="OpenAI voice unavailable ("+(err&&err.message||"error")+"). Using the browser voice instead.";
+  $("chat").appendChild(n);$("chat").scrollTop=1e9;
+}
+// Stops the current speech and runs its "after" callback, so the interview keeps moving.
+function interruptAI(){if(endCurrent)endCurrent(false)}
+function say(text,after){
+  if(endCurrent)endCurrent(true); // supersede any earlier speech silently
+  const id=++sayId;let done=false,failsafe=null;
+  const end=silent=>{
+    if(done)return;done=true;clearTimeout(failsafe);if(endCurrent===end)endCurrent=null;
+    if(ttsCtl)ttsCtl.abort();player.onended=player.onerror=null;player.pause();
+    if(window.speechSynthesis)speechSynthesis.cancel();
+    setSpeaking(false);if(!silent&&after)after();
+  };
+  endCurrent=end;
+  // Text only when the voice is off, or the person is already talking
+  if(!voice||recState==="recording"){failsafe=setTimeout(()=>end(false),voice?0:Math.min(4000,text.length*28));return}
+  failsafe=setTimeout(()=>end(false),text.length*120+10000);
+  ensureCtx();
+  ttsCtl=new AbortController();
+  const browserSpeak=()=>{
+    if(done)return;
+    if("speechSynthesis" in window){try{speechSynthesis.cancel();const u=mkU(text);u.onend=u.onerror=()=>end(false);setSpeaking(true);speechSynthesis.speak(u);return}catch(e){}}
+    end(false);
+  };
+  fetchTTS(text,ttsCtl.signal).then(url=>{
+    if(done)return;
+    if(recState==="recording"){end(false);return}
+    player.src=url;player.onended=()=>end(false);player.onerror=()=>{if(!done)browserSpeak()};
+    return player.play().then(()=>{if(!done)setSpeaking(true)});
+  }).catch(err=>{
+    if(done||(err&&err.name==="AbortError"))return;
+    console.warn("TTS failed",err);ttsNote(err);browserSpeak();
+  });
+}
+function ask(){
+  chips();const d=DOMAINS[i];
+  $("qMeta").textContent=`Question ${i+1} of ${DOMAINS.length} · ${d.k}`;$("qText").textContent=d.q;
+  const t=(i===0?"Let’s begin with ":"Next, a question on ")+d.k+". "+d.q;add("ai",t);say(t);
+}
+function score(txt,d){
+  const w=txt.trim().split(/\s+/).filter(Boolean).length,l=txt.toLowerCase();
+  const hits=d.kw.filter(k=>l.includes(k)).length;
+  return Math.max(1,Math.min(5,Math.round(1+Math.min(w,60)/30+hits*0.55)));
+}
+// ---- answer flow with clarifying questions ----
+const INTRO_Q="Please introduce yourself: your name, background, current role, and what you’re looking for next.";
+const MAX_CLARIFY=2;let attempt=0,pendingTxt="",candName="";
+function strQ(t){const s=(t||"").match(/[^.!?]+[.!?]*/g)||[];return s.filter(x=>!/\?\s*$/.test(x.trim())).join("").trim()}
+function errNote(err){
+  if(!err)return;const n=document.createElement("div");n.className="note err";
+  const msg=err.name==="AbortError"?"the request timed out (server may be asleep)":err.message==="Failed to fetch"?"couldn’t reach "+API_URL+" (blocked, offline or server asleep)":err.message==="Route not found"?"route not found, deploy the updated backend":err.message;
+  n.textContent="AI feedback unavailable: "+msg;$("chat").appendChild(n);$("chat").scrollTop=1e9;
+}
+async function send(){
+  const t=$("ans").value.trim();if(!t||busy)return;busy=true;
+  liveShow("");add("me",t);$("ans").value="";
+  pendingTxt=(pendingTxt?pendingTxt+" ":"")+t;
+  const q=intro?{category:"Introduction",question:INTRO_Q}:{category:DOMAINS[i].k,question:DOMAINS[i].q};
+  const item={category:q.category,question:q.question,answer:pendingTxt};
+  const hint=document.createElement("div");hint.className="m ai live";hint.textContent="Ava is thinking…";$("chat").appendChild(hint);$("chat").scrollTop=1e9;
+  let fb=null,err=null;
+  try{fb=await evaluate(item,attempt)}catch(e){err=e;console.warn("evaluate-answer failed",e)}
+  hint.remove();
+  const words=pendingTxt.split(/\s+/).length;
+  // Does Ava need a clarification before moving on?
+  let clar=null;
+  if(fb){if(fb.proceed===false&&attempt<MAX_CLARIFY)clar=(strQ(fb.comment)+" "+(fb.clarifying_question||"Could you tell me a bit more?")).trim()}
+  else if(words<4&&attempt<1)clar="Could you tell me a little more? A sentence or two would help.";
+  if(clar){
+    attempt++;add("ai",clar);$("chat").lastChild.classList.add("warn");errNote(err);
+    say(clar,()=>{busy=false;if(auto)setTimeout(autoStep,2500)});return;
+  }
+  // Answer accepted: commit it and move on
+  item.feedback=fb;qa.push(item);
+  if(fb&&fb.candidate_name&&!candName)candName=fb.candidate_name;
+  const wasIntro=intro;
+  if(intro){intro=false}else{answers.push(pendingTxt);scores.push(score(pendingTxt,DOMAINS[i]));i++}
+  attempt=0;pendingTxt="";
+  let suffix="",done=false;
+  if(wasIntro)suffix="Now let’s move on to the interview questions.";
+  else if(i>=DOMAINS.length){suffix="Thank you, that’s everything. Let me put together your results.";done=true}
+  const base=strQ(fb&&fb.comment)||(words<5?"That was quite brief. A specific example would make your answer much stronger.":"Thanks for sharing that.");
+  const m=base+" "+suffix;
+  add("ai",m.trim());if(fb&&fb.makes_sense===false)$("chat").lastChild.classList.add("warn");errNote(err);
+  chips();
+  say(m,()=>{busy=false;if(done)finish();else{ask();if(auto)setTimeout(autoStep,2500)}});
+}
+let intro=true;const INTRO_S="Hi Ava, I’m Priya, a product manager with five years of experience in B2B SaaS. I recently led a growth team of six, and I’m now looking for a role that combines product, AI and go-to-market skills.";
+let auto=false;
+function autoStep(){if(!auto||i>=DOMAINS.length)return;$("ans").value=intro?INTRO_S:DOMAINS[i].s;setTimeout(send,1200)}
+
+// ---- AI analysis API ----
+// Where your Express server lives. Override with ?api=https://your-server or window.AI_INTERVIEWER_API.
+const API_URL=(new URLSearchParams(location.search).get("api")||window.AI_INTERVIEWER_API||"https://common-8dyv.onrender.com").replace(/\/$/,"");
+const qa=[];
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function analyze(){
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),70000);
+  try{
+    const r=await fetch(API_URL+"/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({candidate:{name:candName},responses:qa}),signal:ctrl.signal});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.success)throw new Error(j.message||("Server returned "+r.status));
+    return j.analysis;
+  }finally{clearTimeout(to)}
+}
+function renderApi(a){
+  const sc=Number(a.overall_score)||0,L=x=>Array.isArray(x)?x:[];
+  $("report").innerHTML=`
+  <h2 style="margin-top:0">Your interview results</h2>
+  <div class="ov"><div class="big">${sc.toFixed(1)}<small> / 10</small></div><p>${esc(a.summary)}</p></div>
+  <h3>Category scores</h3>
+  ${L(a.category_scores).map(c=>`<div class="sc"><span>${esc(c.category)}</span><div class="bar"><b style="width:${Math.max(0,Math.min(100,c.score*20))}%"></b></div><b>${esc(c.score)}/5</b></div><div class="note" style="margin:-4px 0 8px">${esc(c.comment)}</div>`).join("")}
+  <div class="two">
+    <div><h3>Strengths</h3>${L(a.strengths).map(s=>`<div class="rec"><span class="tag">STRENGTH</span><h4>${esc(s.area)}</h4><div class="mut">${esc(s.evidence)}</div></div>`).join("")}</div>
+    <div><h3>Areas to improve</h3>${L(a.weaknesses).map(w=>`<div class="rec"><span class="tag" style="color:#d97706">IMPROVE</span><h4>${esc(w.area)}</h4><div class="mut">${esc(w.evidence)}</div><div style="margin-top:6px"><b>Next step:</b> ${esc(w.suggestion)}</div></div>`).join("")}</div>
+  </div>
+  <h3>Companies to target</h3>
+  ${L(a.recommended_company_types).map((c,n)=>`<div class="rec"><span class="tag">${n===0?"BEST FIT":"STRONG FIT"}</span><h4>${esc(c.type)}</h4><div class="mut">${esc(c.reason)}</div></div>`).join("")}
+  <div class="row" style="margin-top:14px"><button class="pri" onclick="location.reload()">↻ Restart interview</button></div>`;
+}
+// Wake the server early (free hosts sleep when idle)
+fetch(API_URL+"/api/hi").catch(()=>{});
+async function evaluate(item,att){
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),45000);
+  try{
+    const r=await fetch(API_URL+"/api/evaluate-answer",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({category:item.category,question:item.question,answer:item.answer,attempt:att||0,maxAttempts:MAX_CLARIFY}),signal:ctrl.signal});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.success)throw new Error(j.message||r.status);
+    return j.evaluation;
+  }finally{clearTimeout(to)}
+}
+async function finish(){
+  stopVoice();if(endCurrent)endCurrent(true);if(window.speechSynthesis)speechSynthesis.cancel();
+  $("interview").classList.add("hide");$("report").classList.remove("hide");
+  $("report").innerHTML=`<div style="text-align:center;padding:50px 10px"><div class="spin"></div><h3 style="margin:0 0 6px">Analysing your interview with AI…</h3><p class="note">Reviewing ${qa.length} answers for strengths, gaps and best-fit companies. If the server has been idle, this can take up to a minute.</p></div>`;
+  try{renderApi(await analyze())}
+  catch(e){
+    localReport();
+    $("report").insertAdjacentHTML("afterbegin",`<div class="rec" style="border-color:#ef4444;margin-bottom:14px"><b>AI analysis unavailable</b><div class="note err">${esc(e.name==="AbortError"?"The request timed out":e.message)}. Showing a quick local score instead. Check that your server is running at ${esc(API_URL)}, or open this page with ?api=https://your-server.</div><div class="row"><button id="bRetry">↻ Retry AI analysis</button></div></div>`);
+    $("bRetry").onclick=finish;
+  }
+}
+function localReport(){
+  speechSynthesis&&speechSynthesis.cancel();
+  $("interview").classList.add("hide");$("report").classList.remove("hide");
+  const rows=DOMAINS.map((d,n)=>({d,s:scores[n]})),sorted=[...rows].sort((a,b)=>b.s-a.s);
+  const avg=(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1);
+  const top=sorted.slice(0,3),low=sorted[sorted.length-1];
+  const tips={Product:"Add more outcome metrics to your stories.",Business:"Lead with the commercial diagnosis, then the action.",
+  "AI Fluency":"Name specific tools, evals and guardrails.",Technology:"Show how you de-risk delivery with engineers.",
+  Marketing:"Go deeper on channels, budget and measurement.",Sales:"Quantify the value case and name the stakeholders."};
+  $("report").innerHTML=`
+  <h2 style="margin-top:0">Interview summary</h2>
+  <p style="color:var(--mut)">Overall score <b style="color:var(--ink)">${avg} / 5</b> · Sample data for demonstration. Scores come from a simple answer-length and keyword check, to be replaced by a real AI model.</p>
+  ${rows.map(r=>`<div class="sc"><span>${r.d.ic} ${r.d.k}</span><div class="bar"><b style="width:${r.s*20}%"></b></div><b>${r.s}/5</b></div>`).join("")}
+  <h3>Companies to target</h3>
+  ${top.map((r,n)=>`<div class="rec"><span class="tag">${n===0?"BEST FIT":"STRONG FIT"} · ${r.d.k} ${r.s}/5</span><h4>${COMPANIES[r.d.k][0]}</h4><div style="color:var(--mut)">${COMPANIES[r.d.k][1]}</div></div>`).join("")}
+  <div class="rec"><span class="tag" style="color:var(--mut)">STRETCH AREA · ${low.d.k} ${low.s}/5</span><h4 style="margin-top:4px">${COMPANIES[low.d.k][0]}</h4><div style="color:var(--mut)">Consider these after strengthening this area. ${tips[low.d.k]}</div></div>
+  <div class="row" style="margin-top:14px"><button class="pri" onclick="location.reload()">↻ Restart interview</button></div>`;
+}
+
+// controls
+$("bSample").onclick=()=>{if(intro)$("ans").value=INTRO_S;else if(i<DOMAINS.length)$("ans").value=DOMAINS[i].s};
+$("bSend").onclick=send;
+$("ans").addEventListener("keydown",e=>{if(e.key==="Enter"&&(e.metaKey||e.ctrlKey))send()});
+$("bAuto").onclick=()=>{auto=!auto;$("bAuto").textContent=auto?"⏸ Stop demo":"▶ Auto-demo";if(auto)setTimeout(autoStep,2500)};
+$("bSound").onclick=()=>{voice=!voice;$("bSound").textContent="🔊 Voice: "+(voice?"on":"off");$("bSound").classList.toggle("off",!voice);if(!voice)interruptAI()};
+$("bAiVid").onclick=()=>{aiVid=!aiVid;$("aiVideo").classList.toggle("hide",!aiVid);$("aiAudio").classList.toggle("hide",aiVid);
+  $("bAiVid").textContent="🧑‍💼 Interviewer video: "+(aiVid?"on":"off (audio only)")};
+$("bTheme").onclick=()=>{const r=document.documentElement,dark=getComputedStyle(r).getPropertyValue("--bg").trim()==="#121214";r.setAttribute("data-theme",dark?"light":"dark")};
+$("bCam").onclick=async()=>{
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;$("cam").classList.add("hide");$("camOff").classList.remove("hide");$("bCam").textContent="📷 Turn camera on";$("camNote").textContent="";return}
+  try{stream=await navigator.mediaDevices.getUserMedia({video:true});$("cam").srcObject=stream;$("cam").classList.remove("hide");$("camOff").classList.add("hide");$("bCam").textContent="📷 Turn camera off";$("camNote").textContent="Preview stays on your device, nothing is recorded or uploaded."}
+  catch(e){$("camNote").textContent=await deviceHelp("camera",e)}
+};
+// ---- voice input: mic + voice-activity detection + OpenAI Whisper (via backend) ----
+let micStream=null,micAn=null,micOn=false,micBusy=false,recState="idle",mr=null;
+let audioLevel=0,audioLive=false,noise=.006,loudMs=0,quietMs=0,voicedMs=0,recStartAt=0,txQueue=Promise.resolve(),liveEl=null;
+const SILENCE_MS=1700,MAX_REC_MS=60000,TICK=40,mbuf=new Float32Array(1024),pbuf=new Float32Array(1024);
+function micStatus(t,err){const m=$("micMsg");m.textContent=t||"";m.classList.toggle("err",!!err)}
+function liveShow(t){
+  if(!t){if(liveEl)liveEl.remove();liveEl=null;return}
+  if(!liveEl){liveEl=document.createElement("div");liveEl.className="m me live";$("chat").appendChild(liveEl)}
+  liveEl.textContent=t+" …";$("chat").scrollTop=1e9;
+}
+function micBtn(){$("bMic").innerHTML=micOn?'<span class="rec-dot"></span>Voice on · tap to stop':"🎤 Start voice"}
+function rms(an,buf){an.getFloatTimeDomainData(buf);let s=0;for(let k=0;k<buf.length;k++)s+=buf[k]*buf[k];return Math.sqrt(s/buf.length)}
+// ---- lossless PCM capture with pre-roll (cleaner for speech recognition than compressed audio) ----
+let pcmNode=null,capturing=null,pre=[],preLen=0;
+const DEBUG=new URLSearchParams(location.search).has("debug");
+const WORKLET='class P extends AudioWorkletProcessor{constructor(){super();this.b=[];this.n=0}process(i){const c=i[0]&&i[0][0];if(c){this.b.push(new Float32Array(c));this.n+=c.length;if(this.n>=2048){const o=new Float32Array(this.n);let k=0;for(const x of this.b){o.set(x,k);k+=x.length}this.port.postMessage(o,[o.buffer]);this.b=[];this.n=0}}return true}}registerProcessor("pcm-tap",P);';
+function pushPcm(c){
+  if(capturing){capturing.chunks.push(c);return}
+  pre.push(c);preLen+=c.length;
+  const max=actx.sampleRate*.6;
+  while(pre.length>1&&preLen-pre[0].length>=max)preLen-=pre.shift().length;
+}
+async function setupPcm(src){
+  pre=[];preLen=0;capturing=null;
+  const mute=actx.createGain();mute.gain.value=0;mute.connect(actx.destination);
+  if(actx.audioWorklet){
+    const url=URL.createObjectURL(new Blob([WORKLET],{type:"application/javascript"}));
+    await actx.audioWorklet.addModule(url);
+    pcmNode=new AudioWorkletNode(actx,"pcm-tap");
+    pcmNode.port.onmessage=e=>pushPcm(e.data);
+  }else{
+    pcmNode=actx.createScriptProcessor(2048,1,1);
+    pcmNode.onaudioprocess=e=>pushPcm(new Float32Array(e.inputBuffer.getChannelData(0)));
+  }
+  src.connect(pcmNode);pcmNode.connect(mute);
+}
+function concatF32(list){let n=0;list.forEach(c=>n+=c.length);const o=new Float32Array(n);let k=0;list.forEach(c=>{o.set(c,k);k+=c.length});return o}
+// 16 kHz mono 16-bit WAV, quiet recordings are normalised
+function toWav16k(f32,sr){
+  const R=16000;let data=f32;
+  if(sr!==R){const ratio=sr/R,n=Math.floor(f32.length/ratio),o=new Float32Array(n);
+    for(let i=0;i<n;i++){const a=Math.floor(i*ratio),b=Math.min(f32.length,Math.floor((i+1)*ratio));let s=0;for(let k=a;k<b;k++)s+=f32[k];o[i]=s/Math.max(1,b-a)}
+    data=o}
+  let peak=0;for(let i=0;i<data.length;i++){const v=Math.abs(data[i]);if(v>peak)peak=v}
+  const g=peak>.005?Math.min(8,.9/peak):1,buf=new ArrayBuffer(44+data.length*2),v=new DataView(buf);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,"RIFF");v.setUint32(4,36+data.length*2,true);w(8,"WAVE");w(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);v.setUint32(24,R,true);v.setUint32(28,R*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,"data");v.setUint32(40,data.length*2,true);
+  for(let i=0;i<data.length;i++){const x=Math.max(-1,Math.min(1,data[i]*g));v.setInt16(44+i*2,x<0?x*0x8000:x*0x7fff,true)}
+  return new Blob([buf],{type:"audio/wav"});
+}
+// Explains WHY camera/mic access failed, so the fix is obvious
+async function deviceHelp(kind,err){
+  const n=(err&&err.name)||"",label=kind==="camera"?"Camera":"Microphone";
+  if(!window.isSecureContext)return label+" needs a secure (https) page. Open the https:// address of this site.";
+  if(n==="NotFoundError"||n==="OverconstrainedError")return "No "+kind+" was found. Plug one in or check that it is enabled, then try again.";
+  if(n==="NotReadableError"||n==="AbortError")return "The "+kind+" is busy or unavailable. Close other apps or tabs using it (Zoom, Teams, Meet…) and try again.";
+  let state="";try{state=(await navigator.permissions.query({name:kind})).state}catch(_){}
+  if(state==="denied")return label+" is blocked for this site. Click the 🔒 icon left of the address bar, set "+label+" to Allow (or choose Reset permission), then reload the page.";
+  if(window.self!==window.top)return "This page is embedded inside another page that doesn’t allow the "+kind+". Open the site directly in its own browser tab.";
+  return label+" access was refused. Click the 🔒 icon left of the address bar and allow "+kind+"; if it already says Allow, check your system privacy settings (Windows: Settings → Privacy & security → "+label+", allow apps and your browser; macOS: System Settings → Privacy & Security → "+label+").";
+}
+async function startVoice(){
+  if(micOn||micBusy)return;
+  if(!navigator.mediaDevices){micStatus("Voice input isn’t supported in this browser. Type your answer instead.",1);return}
+  micBusy=true;micStatus("Requesting microphone… please click Allow.");
+  try{
+    ensureCtx();
+    micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
+    if(!actx)throw new Error("Audio engine unavailable");
+    const src=actx.createMediaStreamSource(micStream);micAn=actx.createAnalyser();micAn.fftSize=1024;src.connect(micAn);
+    await setupPcm(src);
+    micOn=true;noise=.006;loudMs=quietMs=voicedMs=0;recState="idle";
+    micBtn();micStatus(speaking?"🔊 AI is speaking. Just start talking to interrupt.":"🎤 Listening… speak any time. Headphones work best.");
+  }catch(err){
+    stopVoice();
+    micStatus(await deviceHelp("microphone",err),1);
+  }
+  micBusy=false;
+}
+function stopVoice(){
+  capturing=null;pre=[];preLen=0;if(pcmNode){try{pcmNode.disconnect()}catch(_){}pcmNode=null}
+  recState="idle";micOn=false;micAn=null;
+  if(micStream){micStream.getTracks().forEach(t=>t.stop());micStream=null}
+  liveShow("");micBtn();micStatus("");
+}
+function startRec(){
+  // include a little audio from just BEFORE the voice was detected so soft word starts aren’t cut off
+  const need=Math.round(actx.sampleRate*(speaking?.2:.45)),all=concatF32(pre),tail=all.length>need?all.subarray(all.length-need):all;
+  capturing={chunks:[tail],voiced:0,trailMs:0};pre=[];preLen=0;recStartAt=performance.now();
+}
+function cancelRec(){recState="idle";loudMs=quietMs=voicedMs=0;capturing=null}
+function stopRec(){
+  const rec=capturing,trail=quietMs;capturing=null;recState="idle";loudMs=quietMs=0;
+  if(!rec)return;
+  if(voicedMs<400){voicedMs=0;micStatus("🎤 Listening…");return}
+  rec.voiced=voicedMs;rec.trailMs=trail;voicedMs=0;finishClip(rec);
+}
+function finishClip(rec){
+  const all=concatF32(rec.chunks),trim=Math.round(Math.max(0,rec.trailMs-450)/1000*actx.sampleRate); // drop long trailing silence (it makes Whisper invent words)
+  const data=trim<all.length?all.subarray(0,all.length-trim):all,blob=toWav16k(data,actx.sampleRate);
+  if(blob.size<4000){micStatus(micOn?"🎤 Listening…":"");return}
+  liveShow("Transcribing");micStatus("⏳ Transcribing…");
+  txQueue=txQueue.then(()=>handleClip(blob,rec.voiced)).catch(e=>console.warn("clip",e));
+}
+function debugClip(blob,model){
+  const n=document.createElement("div");n.className="note";n.append("🎧 Audio sent to "+(model||"?")+": ");
+  const a=document.createElement("audio");a.controls=true;a.src=URL.createObjectURL(blob);a.style.cssText="height:30px;max-width:100%;vertical-align:middle";
+  n.appendChild(a);$("chat").appendChild(n);$("chat").scrollTop=1e9;
+}
+
+
+async function transcribe(blob){
+  const ctrl=new AbortController(),to=setTimeout(()=>ctrl.abort(),45000);
+  try{
+    const fd=new FormData();
+    fd.append("audio",blob,"speech.wav");
+    // Improvement 3: always send an explicit language to avoid wrong-language output.
+    fd.append("language","en");
+    // Optional vocabulary hint: helps with names / domain terms in interview answers.
+    fd.append("prompt","Job interview answer in English. Names, companies, product and technical terms.");
+    const r=await fetch(API_URL+"/api/transcribe",{method:"POST",body:fd,signal:ctrl.signal});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||!j.success)throw new Error(j.message||("Server returned "+r.status));
+    return{text:j.text,model:j.model};
+  }finally{clearTimeout(to)}
+}
+
+async function handleClip(blob,voiced){
+  let text="",model="";
+  try{const r=await transcribe(blob);text=r.text;model=r.model}
+  catch(e){liveShow("");micStatus("Transcription failed: "+(e.name==="AbortError"?"timed out (server may be asleep)":e.message)+". You can type your answer instead.",1);return}
+  liveShow("");text=(text||"").trim();if(DEBUG)debugClip(blob,model);
+  // Whisper sometimes invents "Thank you." from short noise
+  if(!text||(voiced<1500&&/^(thank you|thanks|thanks for watching|you|bye|okay|\.+)[.!\s]*$/i.test(text))){micStatus(micOn?"🎤 Didn’t catch that. Go ahead…":"");return}
+  const cur=$("ans").value.trim();$("ans").value=(cur?cur+" ":"")+text;
+  if($("autoSend").checked)await sendWhenFree();else micStatus("Review your answer, then press Send.");
+}
+async function sendWhenFree(){
+  for(let k=0;k<100&&busy;k++)await new Promise(r=>setTimeout(r,150));
+  if(!busy&&$("ans").value.trim()){micStatus(micOn?"🎤 Listening…":"");send()}
+}
+// Voice-activity detection. Speech must stay above an adaptive threshold for a short time.
+// While the AI is talking the bar is higher, so its own voice leaking into the mic doesn’t trigger it.
+function vad(ml){
+  const thr=Math.min(.12,Math.max(.02,noise*3))*(speaking?1.6:1),loud=ml>thr;
+  if(recState==="idle"){
+    if(!loud){noise=Math.min(.05,noise*.97+ml*.03);loudMs=0;return}
+    startRec();if(!capturing)return;
+    recState="candidate";loudMs=TICK;quietMs=0;voicedMs=TICK;
+  }else if(recState==="candidate"){
+    if(loud){loudMs+=TICK;voicedMs+=TICK;quietMs=0}else{quietMs+=TICK;if(quietMs>250){cancelRec();return}}
+    if(loudMs>=(speaking?320:140)){
+      recState="recording";
+      if(speaking)interruptAI(); // barge-in: cut the AI off immediately
+      micStatus("🔴 Recording… pause when you’re done.");
+    }
+  }else if(recState==="recording"){
+    if(loud){voicedMs+=TICK;quietMs=0}else quietMs+=TICK;
+    if(quietMs>=SILENCE_MS||performance.now()-recStartAt>MAX_REC_MS)stopRec();
+  }
+}
+// Levels for the orb (AI voice while it speaks, otherwise your mic) + VAD
+setInterval(()=>{
+  const playing=speaking&&playAn&&!player.paused;
+  const pl=playing?rms(playAn,pbuf):0,ml=micAn?rms(micAn,mbuf):0;
+  audioLive=speaking?!!playing:!!micAn;
+  audioLevel+=((speaking?pl:ml)-audioLevel)*.45;
+  if(micAn)vad(ml);
+},TICK);
+$("bMic").onclick=()=>micOn?stopVoice():startVoice();
+$("bInt").onclick=interruptAI;
+
+// ---- Siri-style WebGL orb: idle / speaking / thinking / listening ----
+(function mountOrb(){
+  const host=$("aiVideo");host.innerHTML="<canvas></canvas>";
+  const cv=host.firstChild,gl=cv.getContext("webgl",{alpha:true,premultipliedAlpha:true,antialias:true});
+  if(!gl)return; // falls back to the plain gradient tile
+  const VS="attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}";
+  const FS=`precision highp float;
+uniform vec2 uR;uniform float uT,uA,uK,uL;
+float h(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}
+float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<4;i++){v+=a*n(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}
+void main(){
+  vec2 p=(gl_FragCoord.xy-.5*uR)/min(uR.x,uR.y);
+  float ang=atan(p.y,p.x),r=length(p);
+  float R=.27*(1.+.07*uA+.025*sin(uT*1.3));
+  float d=r-R;
+  vec2 q=p/R;float z=sqrt(max(0.,1.-dot(q,q)));vec3 N=vec3(q,z);
+  float s=uT*.22*(1.+uK*1.4+uA*.6);
+  vec2 w=q*1.3+vec2(z*.7);
+  w+=.65*vec2(fbm(w+s),fbm(w-s+4.3));
+  float f=fbm(w*1.3+vec2(s,-s*.7)),g=fbm(w*1.1-vec2(s*.8,s)+9.1);
+  vec3 violet=vec3(.46,.31,1.),cyan=vec3(.10,.80,.96),pink=vec3(.97,.42,.70),gold=vec3(1.,.74,.38);
+  vec3 c1=mix(violet,cyan,uL),c2=mix(cyan,vec3(.30,.95,.75),uL),c3=mix(pink,gold,uK*.8);
+  vec3 col=mix(c1,c2,smoothstep(.25,.7,f));
+  col=mix(col,c3,smoothstep(.42,.85,g)*(.65+.3*uA));
+  col*=.5+.95*smoothstep(.15,.8,f+.2*uA);
+  float fr=pow(1.-z,2.2);
+  col+=mix(vec3(.6,.55,1.),vec3(1.,.85,.6),.3)*fr*(.8+.6*uA);
+  vec3 Lg=normalize(vec3(-.4,.55,.7));
+  col+=pow(max(dot(reflect(-Lg,N),vec3(0.,0.,1.)),0.),40.)*.55;
+  col+=vec3(.9,.85,1.)*exp(-dot(q,q)*3.5)*(.12+.38*uA);
+  float ins=smoothstep(.01,-.01,d);
+  float gv=exp(-max(d,0.)*(9.-uA*3.))*(.3+.45*uA);
+  for(int k=0;k<3;k++){
+    float ph=fract(uT*.45+float(k)/3.),rr=R*(1.08+ph*.9),x=(r-rr)/(.006+.012*ph);
+    gv+=exp(-x*x)*(1.-ph)*uA*.6;
+  }
+  vec3 gc=mix(c1,c3,.5+.5*sin(ang*2.+uT));
+  vec3 outc=col*ins+gc*gv*(1.-ins);
+  gl_FragColor=vec4(outc,clamp(ins+gv*(1.-ins),0.,1.));
+}`;
+  const sh=(t,s)=>{const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);return o};
+  const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(pr);
+  if(!gl.getProgramParameter(pr,gl.LINK_STATUS)){console.warn(gl.getProgramInfoLog(pr));return}
+  gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(pr,"a");gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  const U=n=>gl.getUniformLocation(pr,n),uR=U("uR"),uT=U("uT"),uA=U("uA"),uK=U("uK"),uL=U("uL");
+  const fit=()=>{const r=cv.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);cv.width=Math.round(r.width*d);cv.height=Math.round(r.height*d);gl.viewport(0,0,cv.width,cv.height)};
+  new ResizeObserver(fit).observe(cv);fit();
+  let t=0,amp=.12,think=0,listen=0,last=performance.now(),env=0;
+  function draw(now){
+    requestAnimationFrame(draw);
+    const dt=Math.min(.05,(now-last)/1000);last=now;
+    if(!cv.width||!cv.height||host.classList.contains("hide"))return;
+    t+=dt;
+    // speech-like envelope: syllable bursts with pauses
+    env+=((Math.random()<.12?1:0)-env)*.25;
+    const talk=audioLive?Math.min(1,.3+audioLevel*3):.4+.3*Math.abs(Math.sin(t*9)*Math.sin(t*5.3))+.3*env;
+    const isThink=busy&&!speaking,isListen=micOn&&!speaking&&!busy;
+    const target=speaking?talk:isListen?(audioLive?.2+Math.min(.7,audioLevel*6):.28+.12*Math.sin(t*3)):isThink?.2:.1+.05*Math.sin(t*1.2);
+    amp+=(target-amp)*.14;think+=((isThink?1:0)-think)*.05;listen+=((isListen?1:0)-listen)*.05;
+    gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform2f(uR,cv.width,cv.height);gl.uniform1f(uT,t);gl.uniform1f(uA,amp);gl.uniform1f(uK,think);gl.uniform1f(uL,listen);
+    gl.drawArrays(gl.TRIANGLES,0,3);
+  }
+  requestAnimationFrame(draw);
+})();
+$("aiTile").onclick=()=>{};
+chips();
+
+// ---- voice selection ----
+let chosen=null;
+function enVoices(){return window.speechSynthesis?speechSynthesis.getVoices().filter(v=>/^en/i.test(v.lang)):[]}
+function pickVoice(){const vs=enVoices().filter(v=>!/albert|bad news|bahh|bells|boing|bubbles|cellos|deranged|good news|hysterical|junior|kathy|organ|ralph|trinoids|whisper|zarvox|fred|superstar/i.test(v.name));if(!vs.length)return null;
+  const pref=[/(aria|jenny|sonia|libby|ryan|natasha).*(natural|online)/i,/natural|neural/i,/online/i,/premium|enhanced|siri/i,/google uk english female/i,/samantha|ava\b|allison|serena|karen|moira|zira/i,/google us english/i,/female/i];
+  for(const p of pref){const v=vs.find(v=>p.test(v.name));if(v)return v}
+  return vs.find(v=>!v.localService)||vs[0]}
+function mkU(t){const u=new SpeechSynthesisUtterance(t.replace(/\bAI\b/g,"A I"));const v=chosen||pickVoice();if(v){u.voice=v;u.lang=v.lang}u.rate=.94;u.pitch=1.04;return u}
+function fillVoices(){chosen=pickVoice()}
+
+if(window.speechSynthesis){speechSynthesis.onvoiceschanged=fillVoices;fillVoices()}
+let introStop=null,narr=false,curCap="",introSpk=false,spkId=0;
+const ID=[["Product","🧩","Build, prioritise and ship",0x6366f1],["Business","📈","Think commercially",0x10b981],["AI Fluency","🤖","Use AI with judgement",0x8b5cf6],["Technology","⚙️","Work with engineers",0x0ea5e9],["Marketing","📣","Position and launch",0xf43f5e],["Sales","🤝","Win and close deals",0xf59e0b]];
+const introPlayer=new Audio();
+function speakCap(t){
+  if(!narr||!t)return;
+  const id=++spkId;introSpk=true;introPlayer.pause();if(window.speechSynthesis)speechSynthesis.cancel();
+  const fin=()=>{if(id===spkId)introSpk=false};setTimeout(fin,t.length*115+4500);
+  fetchTTS(t).then(url=>{if(id!==spkId)return;introPlayer.src=url;introPlayer.onended=introPlayer.onerror=fin;return introPlayer.play()})
+    .catch(()=>{if(id!==spkId)return;if(window.speechSynthesis){const u=mkU(t);u.onend=u.onerror=fin;speechSynthesis.speak(u)}else fin()});
+}
+$("iSnd").onclick=()=>{narr=!narr;$("iSnd").textContent=narr?"🔊 Narration on":"🔇 Narration off";if(narr)speakCap(curCap);else{introSpk=false;spkId++;introPlayer.pause();window.speechSynthesis&&speechSynthesis.cancel()}};
+$("iSkip").onclick=$("iBegin").onclick=()=>introStop&&introStop();
+$("bReplay").onclick=()=>startIntro();
+
+// ---- cinematic intro (three.js) ----
+function startIntro(){
+  if(introStop)introStop();
+  const ov=$("intro");
+  if(typeof THREE==="undefined"){ov.classList.add("hide");return}
+  const old=ov.querySelector("canvas");if(old)old.remove();
+  const cv=document.createElement("canvas");ov.prepend(cv);
+  let R;try{R=new THREE.WebGLRenderer({canvas:cv,antialias:true})}catch(e){ov.classList.add("hide");return}
+  ov.classList.remove("hide","fade");$("iBegin").classList.add("hide");$("icap").textContent="";$("isub").textContent="";
+  R.setPixelRatio(Math.min(devicePixelRatio,2));R.toneMapping=THREE.ACESFilmicToneMapping;R.toneMappingExposure=1.15;R.outputEncoding=THREE.sRGBEncoding;
+  const S=new THREE.Scene();S.background=new THREE.Color(0x06060c);S.fog=new THREE.FogExp2(0x06060c,.028);
+  const cam=new THREE.PerspectiveCamera(50,1,.1,200);
+  const size=()=>{const w=innerWidth,h=innerHeight;R.setSize(w,h,false);cam.aspect=w/h;cam.fov=w<h?70:50;cam.updateProjectionMatrix()};size();addEventListener("resize",size);
+  const cl=u=>Math.min(1,Math.max(0,u)),L=(a,b,u)=>a+(b-a)*u,ease=u=>u<.5?2*u*u:1-Math.pow(-2*u+2,2)/2;
+  // lights
+  S.add(new THREE.AmbientLight(0x404060,.5));
+  const pl=(c,i,d,x,y,z)=>{const l=new THREE.PointLight(c,i,d);l.position.set(x,y,z);S.add(l);return l};
+  pl(0x6d5dfc,2.2,45,-9,5,7);pl(0xffcf8a,1.8,45,10,4,5);const coreL=pl(0x9d9aff,3,30,0,2,0);
+  // floor
+  const floor=new THREE.Mesh(new THREE.CircleGeometry(70,64),new THREE.MeshStandardMaterial({color:0x0a0a14,roughness:.28,metalness:.85}));floor.rotation.x=-Math.PI/2;S.add(floor);
+  const grid=new THREE.GridHelper(140,70,0x2a2a44,0x14141f);grid.position.y=.01;grid.material.transparent=true;grid.material.opacity=.35;S.add(grid);
+  [4.6,7.5].forEach((r,k)=>{const m=new THREE.Mesh(new THREE.RingGeometry(r,r+.07,96),new THREE.MeshBasicMaterial({color:0xe0c690,transparent:true,opacity:k?.25:.7}));m.rotation.x=-Math.PI/2;m.position.y=.02;S.add(m)});
+  // core
+  const core=new THREE.Group();S.add(core);core.position.y=2;
+  const VS="varying vec3 vN;varying vec3 vP;varying vec3 vV;void main(){vP=position;vN=normalize(normalMatrix*normal);vec4 mv=modelViewMatrix*vec4(position,1.);vV=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}";
+  const ball=new THREE.Mesh(new THREE.SphereGeometry(.8,96,96),new THREE.ShaderMaterial({uniforms:{uT:{value:0}},vertexShader:VS,fragmentShader:`uniform float uT;varying vec3 vN;varying vec3 vP;varying vec3 vV;
+float h(vec3 p){return sin(p.x*3.1+uT*.5)*sin(p.y*3.7-uT*.4)+sin(p.z*4.3+uT*.7+p.x*2.)*.7;}
+void main(){vec3 N=normalize(vN),V=normalize(vV);float f=pow(1.-max(dot(N,V),0.),2.2);vec3 p=vP*1.4;float n=h(p)+.5*h(p*2.1+3.);
+vec3 deep=vec3(.03,.02,.12),mid=vec3(.30,.22,.85),gold=vec3(1.,.78,.42);vec3 c=mix(deep,mid,smoothstep(-1.2,1.4,n));c+=gold*smoothstep(.9,1.6,n)*.55;
+c+=mix(vec3(.55,.5,1.),gold,.45)*f*1.5;c+=vec3(1.)*pow(f,6.)*.9;float sp=pow(max(dot(reflect(-V,N),normalize(vec3(-.4,.6,.7))),0.),48.);c+=vec3(1.)*sp*.8;gl_FragColor=vec4(c,1.);}`}));core.add(ball);
+  const shell=new THREE.Mesh(new THREE.SphereGeometry(1.1,64,64),new THREE.ShaderMaterial({vertexShader:VS,fragmentShader:`varying vec3 vN;varying vec3 vP;varying vec3 vV;void main(){float f=pow(1.-max(dot(normalize(vN),normalize(vV)),0.),3.);gl_FragColor=vec4(mix(vec3(.5,.45,1.),vec3(1.,.8,.5),.4)*f*1.4,f);}`,transparent:true,blending:THREE.AdditiveBlending,depthWrite:false}));core.add(shell);
+  const HN=900,hp=new Float32Array(HN*3);for(let i=0;i<HN;i++){const a=Math.random()*6.283,r=1.5+Math.pow(Math.random(),1.6)*1.1;hp[i*3]=Math.cos(a)*r;hp[i*3+1]=(Math.random()-.5)*.35*r;hp[i*3+2]=Math.sin(a)*r}
+  const hg=new THREE.BufferGeometry();hg.setAttribute("position",new THREE.BufferAttribute(hp,3));
+  const halo=new THREE.Points(hg,new THREE.PointsMaterial({color:0xf1dcae,size:.035,transparent:true,opacity:.85,blending:THREE.AdditiveBlending,depthWrite:false}));halo.rotation.z=.35;core.add(halo);
+  const wire=new THREE.Group();[0,1,2].forEach(k=>{const m=new THREE.Mesh(new THREE.TorusGeometry(1.25,.008,12,200),new THREE.MeshStandardMaterial({color:0xe0c690,metalness:1,roughness:.25,emissive:0x6a5428}));m.rotation.set(k*1.05,k*.6,0);wire.add(m)});core.add(wire);
+  const rings=[0,1].map(k=>{const m=new THREE.Mesh(new THREE.TorusGeometry(1.7+k*.35,.012,8,128),new THREE.MeshBasicMaterial({color:k?0xe0c690:0xffffff}));core.add(m);return m});
+  const gc=document.createElement("canvas");gc.width=gc.height=128;const gx=gc.getContext("2d"),gg=gx.createRadialGradient(64,64,0,64,64,64);gg.addColorStop(0,"rgba(160,150,255,.9)");gg.addColorStop(1,"rgba(160,150,255,0)");gx.fillStyle=gg;gx.fillRect(0,0,128,128);
+  const glow=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(gc),blending:THREE.AdditiveBlending,transparent:true,depthWrite:false,opacity:.6}));core.add(glow);
+  const sc=document.createElement("canvas");sc.width=512;sc.height=16;const sx=sc.getContext("2d"),sg=sx.createLinearGradient(0,0,512,0);sg.addColorStop(0,"rgba(255,220,160,0)");sg.addColorStop(.5,"rgba(255,235,200,.9)");sg.addColorStop(1,"rgba(255,220,160,0)");sx.fillStyle=sg;sx.fillRect(0,6,512,4);
+  const streak=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(sc),blending:THREE.AdditiveBlending,transparent:true,depthWrite:false,opacity:.55}));streak.scale.set(22,.7,1);core.add(streak);
+  // panels
+  const rr=(x,a,b,w,h,r)=>{x.beginPath();x.moveTo(a+r,b);x.arcTo(a+w,b,a+w,b+h,r);x.arcTo(a+w,b+h,a,b+h,r);x.arcTo(a,b+h,a,b,r);x.arcTo(a,b,a+w,b,r);x.closePath()};
+  const icon=(x,n,cx,cy,col)=>{
+    x.save();x.translate(cx,cy);
+    const bg=x.createRadialGradient(0,-10,2,0,0,46);bg.addColorStop(0,"rgba(255,255,255,.16)");bg.addColorStop(1,"rgba(255,255,255,.02)");
+    x.beginPath();x.arc(0,0,44,0,7);x.fillStyle=bg;x.fill();x.lineWidth=1.2;x.strokeStyle="rgba(232,211,168,.85)";x.stroke();
+    x.beginPath();x.arc(0,0,39,0,7);x.strokeStyle="rgba(255,255,255,.12)";x.stroke();
+    x.shadowColor=col;x.shadowBlur=14;x.strokeStyle="#fff";x.lineWidth=2.4;x.lineCap=x.lineJoin="round";x.fillStyle=col;
+    const P=a=>{x.beginPath();a.forEach((p,i)=>i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1]));x.stroke()},C=(a,b,r,f)=>{x.beginPath();x.arc(a,b,r,0,7);f?(x.fill(),x.stroke()):x.stroke()};
+    if(n==="Product"){P([[0,-20],[17,-10],[17,10],[0,20],[-17,10],[-17,-10],[0,-20]]);P([[-17,-10],[0,0],[17,-10]]);P([[0,0],[0,20]])}
+    else if(n==="Business"){P([[-18,16],[-18,4]]);P([[-6,16],[-6,-4]]);P([[6,16],[6,-10]]);P([[18,16],[18,-16]]);P([[-20,-8],[-8,-16],[2,-8],[16,-24]]);P([[8,-24],[16,-24],[16,-16]])}
+    else if(n==="AI Fluency"){const s=[[-17,-12],[17,-12],[-17,13],[17,13],[0,-23]];s.forEach(p=>P([[0,0],p]));s.forEach(p=>C(p[0],p[1],3.6));C(0,0,7,1)}
+    else if(n==="Technology"){P([[-9,-14],[-21,0],[-9,14]]);P([[9,-14],[21,0],[9,14]]);P([[4,-18],[-4,18]])}
+    else if(n==="Marketing"){C(0,0,20);C(0,0,12);C(0,0,3.5,1);P([[3,-3],[21,-21]]);P([[14,-21],[21,-21],[21,-14]])}
+    else{C(0,0,21);P([[-9,1],[-3,8],[10,-8]])}
+    x.restore()};
+  const tex=d=>{const c=document.createElement("canvas");c.width=512;c.height=640;const x=c.getContext("2d"),col="#"+d[3].toString(16).padStart(6,"0");
+    x.scale(2,2);const bgg=x.createLinearGradient(0,0,256,320);bgg.addColorStop(0,"#161a40");bgg.addColorStop(1,"#080a1a");x.fillStyle=bgg;x.fillRect(0,0,256,320);x.fillStyle="rgba(8,9,20,.4)";rr(x,6,6,244,308,18);x.fill();const g=x.createLinearGradient(0,0,256,320);g.addColorStop(0,"rgba(255,255,255,.14)");g.addColorStop(.5,"rgba(255,255,255,.02)");g.addColorStop(1,"rgba(255,255,255,.08)");x.fillStyle=g;x.fill();
+    const bs=x.createLinearGradient(0,0,256,320);bs.addColorStop(0,"rgba(255,255,255,.75)");bs.addColorStop(.5,col);bs.addColorStop(1,"rgba(255,255,255,.2)");x.strokeStyle=bs;x.lineWidth=1.6;x.stroke();
+    x.strokeStyle="rgba(232,211,168,.9)";x.lineWidth=2;[[18,18,1,1],[238,18,-1,1],[18,302,1,-1],[238,302,-1,-1]].forEach(k=>{x.beginPath();x.moveTo(k[0],k[1]+14*k[3]);x.lineTo(k[0],k[1]);x.lineTo(k[0]+14*k[2],k[1]);x.stroke()});
+    icon(x,d[0],128,112,col);x.textAlign="center";x.fillStyle="#fff";x.font="500 31px 'Cormorant Garamond',Georgia,serif";x.fillText(d[0].toUpperCase().split("").join(String.fromCharCode(8202)),128,204);
+    x.fillStyle="#e8d3a8";x.fillRect(108,219,40,1);x.font="300 13px Inter,system-ui,sans-serif";x.fillStyle="rgba(255,255,255,.72)";x.fillText(d[2],128,246);x.font="500 10px Inter,system-ui,sans-serif";x.fillStyle="#e8d3a8";x.fillText("0"+(ID.indexOf(d)+1)+"  /  06",128,286);
+    const t=new THREE.CanvasTexture(c);t.encoding=THREE.sRGBEncoding;t.anisotropy=4;return t};
+  const sh=new THREE.Shape(),W=1.1,H=1.375,rd=.16;sh.moveTo(-W+rd,-H);sh.lineTo(W-rd,-H);sh.quadraticCurveTo(W,-H,W,-H+rd);sh.lineTo(W,H-rd);sh.quadraticCurveTo(W,H,W-rd,H);sh.lineTo(-W+rd,H);sh.quadraticCurveTo(-W,H,-W,H-rd);sh.lineTo(-W,-H+rd);sh.quadraticCurveTo(-W,-H,-W+rd,-H);
+  const cg=new THREE.ExtrudeGeometry(sh,{depth:.22,bevelEnabled:true,bevelThickness:.05,bevelSize:.05,bevelSegments:5,curveSegments:10});cg.translate(0,0,-.11);
+  const cp=cg.attributes.position,cu=cg.attributes.uv;for(let i=0;i<cu.count;i++)cu.setXY(i,(cp.getX(i)+W)/(2*W),(cp.getY(i)+H)/(2*H));
+  const edgeMat=new THREE.MeshStandardMaterial({color:0xe0c690,metalness:1,roughness:.22,emissive:0x4a3812});
+  const P=ID.map((d,i)=>{const tx=tex(d);const m=new THREE.Mesh(cg,[new THREE.MeshStandardMaterial({map:tx,emissiveMap:tx,emissive:0xffffff,emissiveIntensity:.8,roughness:.3,metalness:.15}),edgeMat]);m.scale.setScalar(.001);S.add(m);return{m,u:0}});
+  // skyline
+  const wc=document.createElement("canvas");wc.width=64;wc.height=128;const wx=wc.getContext("2d");wx.fillStyle="#000";wx.fillRect(0,0,64,128);
+  for(let y=3;y<126;y+=6){for(let x=3;x<62;x+=7)if(Math.random()<.6){wx.fillStyle=Math.random()<.78?"rgba(255,227,176,"+(.5+Math.random()*.5)+")":"rgba(188,216,255,"+(.5+Math.random()*.5)+")";wx.fillRect(x,y,5,3)}}wx.fillStyle="rgba(255,255,255,.08)";for(let x=0;x<64;x+=7)wx.fillRect(x,0,1,128);
+  const wt=new THREE.CanvasTexture(wc);wt.wrapS=wt.wrapT=THREE.RepeatWrapping;wt.repeat.set(1,3);
+  const bm=new THREE.MeshPhysicalMaterial({color:0x090c16,roughness:.16,metalness:.92,clearcoat:.7,clearcoatRoughness:.15,emissive:0xffffff,emissiveMap:wt,emissiveIntensity:0});
+  const bg=new THREE.BoxGeometry(1.8,1,1.8);bg.translate(0,.5,0);
+  const edgeM=new THREE.LineBasicMaterial({color:0xe0c690,transparent:true,opacity:.5}),eg=new THREE.EdgesGeometry(bg),spG=new THREE.CylinderGeometry(.015,.03,1,6);spG.translate(0,.5,0);
+  const B=[];[-8,-14,-20,-27].forEach((z,r)=>{for(let x=-20;x<=20;x+=2.7){if(r===0&&Math.abs(x)<3.5)continue;const h=3+Math.random()*(r===0?6:r===3?16:12),m=new THREE.Mesh(bg,bm);m.position.set(x+(Math.random()-.5)*.7,0,z+(Math.random()-.5)*1.5);const w=.75+Math.random()*.4;m.scale.set(w,.001,w);
+    m.add(new THREE.LineSegments(eg,edgeM));
+    if(Math.random()<.65){const t=new THREE.Mesh(bg,bm);t.scale.set(.72,.26,.72);t.position.y=1;t.add(new THREE.LineSegments(eg,edgeM));m.add(t);if(Math.random()<.5){const sp=new THREE.Mesh(spG,new THREE.MeshBasicMaterial({color:0xffe3b0}));sp.scale.set(1,.1,1);sp.position.y=1.26;m.add(sp)}}
+    S.add(m);B.push({m,h,s:Math.abs(x)*.08+Math.random()*.6,cap:null})}});
+  ID.forEach((d,i)=>{const b=B[Math.floor((i+.5)*B.length/6)];const cp=new THREE.Mesh(new THREE.BoxGeometry(1.9,.14,1.9),new THREE.MeshBasicMaterial({color:d[3]}));cp.position.x=b.m.position.x;cp.position.z=b.m.position.z;cp.visible=false;S.add(cp);b.cap=cp;b.h=Math.max(b.h,9)});
+  // dust
+  const N=700,pa=new Float32Array(N*3);for(let i=0;i<N*3;i+=3){pa[i]=(Math.random()-.5)*50;pa[i+1]=Math.random()*14;pa[i+2]=(Math.random()-.5)*50}
+  const pg=new THREE.BufferGeometry();pg.setAttribute("position",new THREE.BufferAttribute(pa,3));
+  const dust=new THREE.Points(pg,new THREE.PointsMaterial({color:0xf1dcae,size:.05,transparent:true,opacity:.7,depthWrite:false}));S.add(dust);
+  // timeline
+  const DS=6,DUR=2.4,DE=DS+6*DUR,AN=DE+4.6,END=AN+8.5;
+  const CAP=[[.4,"AI INTERVIEW","Meet Ava, your AI interviewer"],[3.2,"Six areas. One conversation.","Ava will ask you questions across six core areas"]];
+  const SUB={Product:"How you build, prioritise and ship",Business:"How you think about revenue and growth","AI Fluency":"How you use AI with good judgement",Technology:"How you work with engineers",Marketing:"How you position and launch",Sales:"How you handle buyers and close deals"};
+  ID.forEach((d,i)=>CAP.push([DS+i*DUR,d[0],SUB[d[0]]]));
+  CAP.push([DE,"Ava analyses your answers","Every response is scored across all six areas"],[AN+.4,"Then, your next move","Ava recommends the kinds of companies you should target"],[END,"Ready when you are.",""]);
+  let ci=-1,t=0,last=performance.now(),raf=0,ended=false;introSpk=false;
+  const tp=new THREE.Vector3(),tl=new THREE.Vector3(),lk=new THREE.Vector3(0,2,0);cam.position.set(0,3,17);
+  function frame(now){
+    raf=requestAnimationFrame(frame);const dt=Math.min(.05,(now-last)/1000);last=now;
+    if(!ended){const nb=CAP[ci+1]?CAP[ci+1][0]:END;if(narr&&introSpk&&t>=nb-.5)t=Math.min(nb-.03,t+dt*.08);else t+=dt;if(t>=END){t=END;ended=true;$("iBegin").classList.remove("hide")}}
+    const T=t;
+    let k=CAP.length-1;while(k>0&&CAP[k][0]>T)k--;
+    if(T>=CAP[0][0]&&k!==ci){ci=k;const c=$("icap"),s=$("isub");c.textContent=CAP[k][1];s.textContent=CAP[k][2];[c,s].forEach(e=>{e.classList.remove("swap");void e.offsetWidth;e.classList.add("swap")});curCap=CAP[k][1]+". "+CAP[k][2];speakCap(curCap)}
+    $("ipg").style.width=(T/END*100)+"%";
+    // camera
+    if(T<DS){const u=ease(T/DS);tp.set(Math.sin(T*.3)*1.2,L(2.2,2.7,u),L(17,11,u));tl.set(0,2,0)}
+    else if(T<DE){const i=Math.min(5,Math.floor((T-DS)/DUR)),a=i*Math.PI/3;tp.set(Math.sin(a+.35)*8.4,2.7,Math.cos(a+.35)*8.4);tl.set(Math.sin(a)*4.5,2.2,Math.cos(a)*4.5)}
+    else if(T<AN){tp.set(0,5,13);tl.set(0,2,0)}
+    else{const v=ease(cl((T-AN)/(END-AN)));tp.set(L(-13,12,v),L(4,6.5,v),L(17,10,v));tl.set(0,4,-11)}
+    const kk=1-Math.exp(-dt*(T>=AN?1.6:2.6));cam.position.lerp(tp,kk);lk.lerp(tl,kk);cam.lookAt(lk);
+    // core
+    const cs=Math.max(.001,(1+.06*Math.sin(T*3)+.7*ease(cl((T-DE)/2.5))-.9*ease(cl((T-AN-1)/2.5)))*ease(cl(T/1.2)));
+    core.scale.setScalar(cs);glow.scale.setScalar(7);ball.material.uniforms.uT.value=T;halo.rotation.y=T*.18;wire.rotation.y=T*.4;wire.rotation.x=T*.2;rings[0].rotation.set(T*.5,T*.3,0);rings[1].rotation.set(1.2,T*.4,T*.2);coreL.intensity=1+2*cs;
+    // panels
+    const e0=ease(cl((T-DE)/2.6)),r=L(4.5,.3,e0);
+    P.forEach((p,i)=>{const a=i*Math.PI/3,ap=ease(cl((T-.8-i*.35)/1.2)),act=(T>=DS&&T<DE&&Math.floor((T-DS)/DUR)===i)?1:0;p.u=L(p.u,act,.08);
+      p.m.scale.setScalar(Math.max(.001,ap*(1+.14*p.u)*L(1,.1,e0)));p.m.position.set(Math.sin(a)*r,L(2.2,2,e0)+Math.sin(T*1.2+i)*.12,Math.cos(a)*r);p.m.rotation.set(Math.sin(T*.7+i)*.035,a+Math.sin(T*.5+i*2)*.06,0);p.m.material[0].emissiveIntensity=L(.7,1.3,p.u);p.m.visible=T<AN+1.6});
+    // skyline
+    bm.emissiveIntensity=ease(cl((T-AN-1)/3))*1.2;
+    B.forEach(b=>{const g=ease(cl((T-AN-1.2-b.s)/2.4));b.m.scale.y=Math.max(.001,b.h*g);if(b.cap){b.cap.visible=g>.03;b.cap.position.y=b.m.scale.y*1.3+.35+Math.sin(T*2+b.s)*.08}});
+    dust.rotation.y=T*.02;dust.position.y=Math.sin(T*.3)*.3;
+    R.render(S,cam);
+  }
+  raf=requestAnimationFrame(frame);
+  introStop=()=>{cancelAnimationFrame(raf);removeEventListener("resize",size);spkId++;introSpk=false;introPlayer.pause();if(window.speechSynthesis)speechSynthesis.cancel();
+    try{S.traverse(o=>{if(o.geometry)o.geometry.dispose();const ms=Array.isArray(o.material)?o.material:o.material?[o.material]:[];ms.forEach(m=>{if(m.map)m.map.dispose();m.dispose()})});R.dispose()}catch(e){}
+    ov.classList.add("fade");setTimeout(()=>{if(ov.classList.contains("fade"))ov.classList.add("hide")},750);introStop=null};
+}
+$("qText").textContent="Press Start to begin.";
+startIntro();
+const st=document.createElement("button");st.className="pri";st.textContent="▶ Start interview";
+st.onclick=()=>{st.remove();ensureCtx();startVoice();
+  const g="Hello, and welcome! I’m Ava, your AI interviewer today. I’ll ask you one question each on product, business, AI fluency, technology, marketing and sales. At the end, I’ll share your results and suggest the kinds of companies you should target. To start, please tell me your name, your background, your current role, and what you’re looking for next.";
+  $("qMeta").textContent="Introduction";$("qText").textContent=INTRO_Q;
+  add("ai",g);say(g)};
+document.querySelector(".ctrl").prepend(st);
+</script>
+</body>
+</html>
