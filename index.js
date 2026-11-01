@@ -12,15 +12,38 @@ app.set('trust proxy', 1); // correct client IPs behind Render / proxies (used b
 const PORT = process.env.PORT || 3000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-// Speech settings (all use the SAME OPENAI_API_KEY)
-const STT_MODEL = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe'; // most accurate. Falls back to 'whisper-1' automatically
-const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1'; // or 'tts-1-hd' / 'gpt-4o-mini-tts'
-const DEFAULT_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
-const TTS_INSTRUCTIONS =
-  process.env.OPENAI_TTS_INSTRUCTIONS ||
-  'Speak like a warm, professional interviewer: natural pace, friendly and encouraging.';
-const VOICES = ['alloy', 'echo', 'fable', 'nova', 'onyx', 'shimmer'];
+// Speech settings: ElevenLabs handles BOTH text-to-speech and speech-to-text.
+// (OpenAI is still used for the interview chat/analysis endpoints below.)
+const ELEVEN_BASE = 'https://api.elevenlabs.io';
+const STT_MODEL = process.env.ELEVENLABS_STT_MODEL || 'scribe_v2'; // falls back to 'scribe_v1' automatically
+const TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5'; // fast. Or 'eleven_multilingual_v2' for max quality
+const TTS_FORMAT = process.env.ELEVENLABS_TTS_FORMAT || 'mp3_44100_128';
 
+// Friendly voice names (sent by the frontend) -> ElevenLabs voice IDs.
+// Any ElevenLabs voice ID from your own library can also be passed directly, or set as the default.
+const VOICES = {
+  sarah: 'EXAVITQu4vr4xnSDxMaL',
+  jessica: 'cgSgspJ2msm6clMCkdW9',
+  laura: 'FGY2WhTYpPnrIDTdsKH5',
+  alice: 'Xb7hH8MSUJpSbSDYk0k2',
+  matilda: 'XrExE9yKIg1WjnnlVkGX',
+  lily: 'pFZP5JQG7iQjIQuC4Bku',
+  george: 'JBFqnCBsd6RMkjVDRZzb',
+  brian: 'nPczCjzI2devNBz1zQrb',
+  daniel: 'onwK4e9ZLuTAKqWW03F9',
+  eric: 'cjVigY5qzO86Huf0OWal',
+};
+const DEFAULT_VOICE = process.env.ELEVENLABS_VOICE_ID || VOICES.sarah;
+const VOICE_SETTINGS = {
+  stability: Number(process.env.ELEVENLABS_STABILITY ?? 0.5),
+  similarity_boost: Number(process.env.ELEVENLABS_SIMILARITY ?? 0.75),
+  style: 0,
+  use_speaker_boost: true,
+};
+
+if (!process.env.ELEVENLABS_API_KEY) {
+  console.warn('⚠️  ELEVENLABS_API_KEY is not set. Voice (speak/transcribe) endpoints will fail until you add it.');
+}
 if (!process.env.OPENAI_API_KEY) {
   console.warn('⚠️  OPENAI_API_KEY is not set. AI endpoints will fail until you add it.');
 }
@@ -166,7 +189,7 @@ async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTo
 }
 
 // ============================================
-// 0) Speech: Whisper transcription + OpenAI text-to-speech
+// 0) Speech: ElevenLabs speech-to-text (Scribe) + text-to-speech
 // ============================================
 
 const MIME_TO_EXT = {
@@ -183,16 +206,49 @@ const MIME_TO_EXT = {
   'audio/x-wav': 'wav',
 };
 
+// ElevenLabs accepts ISO 639-1 or 639-3 codes; 3-letter codes are the most reliable for locking a language.
+const LANG_3 = { en: 'eng', es: 'spa', fr: 'fra', de: 'deu', it: 'ita', pt: 'por', hi: 'hin', ja: 'jpn', ko: 'kor', zh: 'zho', ar: 'ara', ru: 'rus', ml: 'mal', ta: 'tam', te: 'tel' };
+
+/** Maps an ElevenLabs HTTP failure to a friendly HTTP error. */
+async function elevenError(response, what) {
+  let detail = '';
+  try {
+    const j = await response.json();
+    const d = j && (j.detail || j.message);
+    detail = typeof d === 'string' ? d : (d && (d.message || d.status)) || JSON.stringify(j);
+  } catch (e) {
+    /* body was not JSON */
+  }
+  detail = String(detail || '').slice(0, 200);
+  console.error(`ElevenLabs ${what} failed (${response.status}): ${detail}`);
+  if (response.status === 401) return httpError(500, 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY on the server.');
+  if (response.status === 402 || response.status === 429) {
+    return httpError(429, 'ElevenLabs quota or rate limit reached. Please try again shortly.');
+  }
+  if (response.status === 400 || response.status === 404 || response.status === 422) {
+    return httpError(502, `ElevenLabs rejected the ${what} request: ${detail}`);
+  }
+  return httpError(502, 'Could not reach the ElevenLabs service. Please try again.');
+}
+
+async function elevenFetch(url, options, what) {
+  try {
+    return await fetch(url, { ...options, signal: AbortSignal.timeout(50 * 1000) });
+  } catch (err) {
+    console.error(`ElevenLabs ${what} network error:`, err && err.message);
+    throw httpError(502, 'Could not reach the ElevenLabs service. Please try again.');
+  }
+}
+
 /**
  * POST /api/transcribe   (multipart/form-data)
  *   audio:    the recorded clip (webm / mp4 / ogg / wav / mp3)
  *   language: optional ISO-639-1 code, e.g. "en" (improves accuracy and speed)
- *   prompt:   optional short vocabulary hint (max 200 chars)
  * Returns { success, text, model }
  */
 app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, res, next) => {
   try {
-    if (!process.env.OPENAI_API_KEY) throw httpError(500, 'Server is missing OPENAI_API_KEY.');
+    if (!process.env.ELEVENLABS_API_KEY) throw httpError(500, 'Server is missing ELEVENLABS_API_KEY.');
     if (!req.file || !req.file.buffer || req.file.size < 500) {
       return res.status(400).json({
         success: false,
@@ -200,39 +256,42 @@ app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, re
       });
     }
 
-    const mime = String(req.file.mimetype || '').split(';')[0].toLowerCase();
+    const mime = String(req.file.mimetype || '').split(';')[0].toLowerCase() || 'audio/webm';
     const ext = MIME_TO_EXT[mime] || 'webm';
-    const language = /^[a-z]{2}$/i.test(String(req.body?.language || '')) ? req.body.language.toLowerCase() : undefined;
-    const prompt = cleanText(req.body?.prompt, 200) || undefined;
+    const lang = String(req.body?.language || '').toLowerCase();
+    const languageCode = /^[a-z]{2,3}$/.test(lang) ? LANG_3[lang] || lang : undefined;
 
-    const file = await OpenAI.toFile(req.file.buffer, `speech.${ext}`, { type: mime || 'audio/webm' });
-
-    // Try the configured model first; fall back to whisper-1 if the account can't use it
-    const models = STT_MODEL === 'whisper-1' ? ['whisper-1'] : [STT_MODEL, 'whisper-1'];
+    // Try the configured model first; fall back to scribe_v1 if the account can't use it
+    const models = STT_MODEL === 'scribe_v1' ? ['scribe_v1'] : [STT_MODEL, 'scribe_v1'];
     let result;
     let usedModel = STT_MODEL;
-    let lastErr;
+    let lastResponse;
     for (const m of models) {
-      try {
-        result = await openai.audio.transcriptions.create({
-          file,
-          model: m,
-          response_format: 'json',
-          temperature: 0,
-          ...(language ? { language } : {}),
-          ...(prompt ? { prompt } : {}),
-        });
+      const form = new FormData();
+      form.append('file', new Blob([req.file.buffer], { type: mime }), `speech.${ext}`);
+      form.append('model_id', m);
+      form.append('tag_audio_events', 'false'); // no "(laughter)" / "(music)" tags in the text
+      form.append('diarize', 'false');
+      if (languageCode) form.append('language_code', languageCode);
+
+      const response = await elevenFetch(
+        `${ELEVEN_BASE}/v1/speech-to-text`,
+        { method: 'POST', headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, body: form },
+        'transcription'
+      );
+      if (response.ok) {
+        result = await response.json();
         usedModel = m;
         break;
-      } catch (err) {
-        lastErr = err;
-        if (![400, 403, 404].includes(err && err.status)) break; // only fall back on "model not available"-type errors
-        console.warn(`Transcription with ${m} failed (${err.status}): ${err.message}`);
       }
+      lastResponse = response;
+      if (![400, 403, 404, 422].includes(response.status)) break; // only fall back on "model not available"-type errors
+      console.warn(`Transcription with ${m} failed (${response.status})`);
     }
-    if (!result) throw mapOpenAIError(lastErr, 'transcription');
+    if (!result) throw await elevenError(lastResponse, 'transcription');
 
-    const text = (typeof result === 'string' ? result : result?.text || '').trim();
+    const text = String(result?.text || '').trim();
+    console.log(`Transcribed ${req.file.size} bytes with ${usedModel}: "${text.slice(0, 80)}"`);
     return res.status(200).json({ success: true, text, model: usedModel });
   } catch (err) {
     next(err);
@@ -241,35 +300,36 @@ app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, re
 
 /**
  * POST /api/speak
- * Body: { "text": "...", "voice": "nova" }
+ * Body: { "text": "...", "voice": "sarah" }   (voice = a name from VOICES, or an ElevenLabs voice ID)
  * Returns the spoken audio as audio/mpeg.
  */
 app.post('/api/speak', audioLimiter, async (req, res, next) => {
   try {
-    if (!process.env.OPENAI_API_KEY) throw httpError(500, 'Server is missing OPENAI_API_KEY.');
+    if (!process.env.ELEVENLABS_API_KEY) throw httpError(500, 'Server is missing ELEVENLABS_API_KEY.');
 
     const text = cleanText(req.body?.text, MAX_SPEAK_LENGTH);
     if (!text) {
       return res.status(400).json({ success: false, message: '"text" must be a non-empty string.' });
     }
-    const requested = cleanText(req.body?.voice, 30).toLowerCase();
-    const voice = VOICES.includes(requested) ? requested : VOICES.includes(DEFAULT_VOICE) ? DEFAULT_VOICE : 'nova';
+    const requested = cleanText(req.body?.voice, 40);
+    const voiceId = VOICES[requested.toLowerCase()] || (/^[A-Za-z0-9]{15,30}$/.test(requested) ? requested : DEFAULT_VOICE);
 
-    let speech;
-    try {
-      speech = await openai.audio.speech.create({
-        model: TTS_MODEL,
-        voice,
-        input: text,
-        response_format: 'mp3',
-        // "instructions" is only supported by the gpt-4o-*-tts models
-        ...(TTS_MODEL.startsWith('gpt-4o') ? { instructions: TTS_INSTRUCTIONS } : {}),
-      });
-    } catch (err) {
-      throw mapOpenAIError(err, 'speech');
-    }
+    const response = await elevenFetch(
+      `${ELEVEN_BASE}/v1/text-to-speech/${voiceId}?output_format=${encodeURIComponent(TTS_FORMAT)}`,
+      {
+        method: 'POST',
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg',
+        },
+        body: JSON.stringify({ text, model_id: TTS_MODEL, voice_settings: VOICE_SETTINGS }),
+      },
+      'speech'
+    );
+    if (!response.ok) throw await elevenError(response, 'speech');
 
-    const audio = Buffer.from(await speech.arrayBuffer());
+    const audio = Buffer.from(await response.arrayBuffer());
     res.set({
       'Content-Type': 'audio/mpeg',
       'Content-Length': String(audio.length),
@@ -638,7 +698,7 @@ app.get('/api/hi', (req, res) => {
     success: true,
     message: 'hi..',
     timestamp: new Date().toISOString(),
-    speech: { stt: STT_MODEL, tts: TTS_MODEL },
+    speech: { provider: 'elevenlabs', stt: STT_MODEL, tts: TTS_MODEL, voices: Object.keys(VOICES) },
   });
 });
 
