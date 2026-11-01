@@ -3,11 +3,23 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const OpenAI = require('openai');
 
 const app = express();
+app.set('trust proxy', 1); // correct client IPs behind Render / proxies (used by the rate limiter)
+
 const PORT = process.env.PORT || 3000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+// Speech settings (all use the SAME OPENAI_API_KEY)
+const STT_MODEL = process.env.OPENAI_STT_MODEL || 'whisper-1'; // or 'gpt-4o-mini-transcribe'
+const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1'; // or 'tts-1-hd' / 'gpt-4o-mini-tts'
+const DEFAULT_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
+const TTS_INSTRUCTIONS =
+  process.env.OPENAI_TTS_INSTRUCTIONS ||
+  'Speak like a warm, professional interviewer: natural pace, friendly and encouraging.';
+const VOICES = ['alloy', 'echo', 'fable', 'nova', 'onyx', 'shimmer'];
 
 if (!process.env.OPENAI_API_KEY) {
   console.warn('⚠️  OPENAI_API_KEY is not set. AI endpoints will fail until you add it.');
@@ -36,12 +48,49 @@ app.use((req, res, next) => {
   next();
 });
 
+// Audio uploads are kept in memory (short spoken answers only)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024, files: 1 }, // 12 MB is plenty for a few minutes of speech
+});
+
+/**
+ * Tiny in-memory rate limiter (per IP). Your API is public (CORS *), so this
+ * stops a stranger from burning through your OpenAI credits.
+ */
+function rateLimit({ windowMs, max }) {
+  const hits = new Map();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, v] of hits) if (v.reset < now) hits.delete(key);
+  }, windowMs).unref();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    let h = hits.get(req.ip);
+    if (!h || h.reset < now) {
+      h = { count: 0, reset: now + windowMs };
+      hits.set(req.ip, h);
+    }
+    h.count += 1;
+    if (h.count > max) {
+      res.set('Retry-After', String(Math.ceil((h.reset - now) / 1000)));
+      return res.status(429).json({ success: false, message: 'Too many requests. Please slow down.' });
+    }
+    next();
+  };
+}
+
+const audioLimiter = rateLimit({ windowMs: 60 * 1000, max: 60 });
+const aiLimiter = rateLimit({ windowMs: 60 * 1000, max: 40 });
+
 // ============================================
 // Shared helpers
 // ============================================
 
 const MAX_RESPONSES = 20;
 const MAX_TEXT_LENGTH = 4000;
+const MAX_SPEAK_LENGTH = 1000;
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -51,6 +100,22 @@ function httpError(status, message) {
 
 function cleanText(value, max = MAX_TEXT_LENGTH) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+/** Maps an OpenAI SDK error to a friendly HTTP error. */
+function mapOpenAIError(err, what) {
+  if (err && err.status === 401) {
+    return httpError(500, 'OpenAI authentication failed. Check OPENAI_API_KEY on the server.');
+  }
+  if (err && err.status === 429) {
+    return httpError(429, 'OpenAI rate limit or quota reached. Please try again shortly.');
+  }
+  if (err && (err.status === 400 || err.status === 404)) {
+    console.error(`OpenAI rejected the ${what} request:`, err.message);
+    return httpError(502, `OpenAI rejected the ${what} request: ${String(err.message || '').slice(0, 200)}`);
+  }
+  console.error(`OpenAI ${what} error:`, err && err.message);
+  return httpError(502, 'Could not reach the AI service. Please try again.');
 }
 
 /**
@@ -87,13 +152,7 @@ async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTo
       response_format: { type: 'json_schema', json_schema: schema },
     });
   } catch (err) {
-    if (err && err.status === 401) {
-      throw httpError(500, 'OpenAI authentication failed. Check OPENAI_API_KEY on the server.');
-    }
-    if (err && err.status === 429) {
-      throw httpError(429, 'OpenAI rate limit or quota reached. Please try again shortly.');
-    }
-    throw httpError(502, 'Could not reach the AI service. Please try again.');
+    throw mapOpenAIError(err, 'chat');
   }
 
   const raw = completion.choices?.[0]?.message?.content;
@@ -105,6 +164,111 @@ async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTo
     throw httpError(502, 'The AI returned an invalid response. Please try again.');
   }
 }
+
+// ============================================
+// 0) Speech: Whisper transcription + OpenAI text-to-speech
+// ============================================
+
+const MIME_TO_EXT = {
+  'audio/webm': 'webm',
+  'video/webm': 'webm',
+  'audio/mp4': 'mp4',
+  'video/mp4': 'mp4',
+  'audio/m4a': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'audio/ogg': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+};
+
+/**
+ * POST /api/transcribe   (multipart/form-data)
+ *   audio:    the recorded clip (webm / mp4 / ogg / wav / mp3)
+ *   language: optional ISO-639-1 code, e.g. "en" (improves accuracy and speed)
+ *   prompt:   optional short vocabulary hint (max 200 chars)
+ * Returns { success, text, model }
+ */
+app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, res, next) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) throw httpError(500, 'Server is missing OPENAI_API_KEY.');
+    if (!req.file || !req.file.buffer || req.file.size < 500) {
+      return res.status(400).json({
+        success: false,
+        message: 'Send an audio clip in the "audio" form field.',
+      });
+    }
+
+    const mime = String(req.file.mimetype || '').split(';')[0].toLowerCase();
+    const ext = MIME_TO_EXT[mime] || 'webm';
+    const language = /^[a-z]{2}$/i.test(String(req.body?.language || '')) ? req.body.language.toLowerCase() : undefined;
+    const prompt = cleanText(req.body?.prompt, 200) || undefined;
+
+    const file = await OpenAI.toFile(req.file.buffer, `speech.${ext}`, { type: mime || 'audio/webm' });
+
+    let result;
+    try {
+      result = await openai.audio.transcriptions.create({
+        file,
+        model: STT_MODEL,
+        response_format: 'json',
+        temperature: 0,
+        ...(language ? { language } : {}),
+        ...(prompt ? { prompt } : {}),
+      });
+    } catch (err) {
+      throw mapOpenAIError(err, 'transcription');
+    }
+
+    const text = (typeof result === 'string' ? result : result?.text || '').trim();
+    return res.status(200).json({ success: true, text, model: STT_MODEL });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * POST /api/speak
+ * Body: { "text": "...", "voice": "nova" }
+ * Returns the spoken audio as audio/mpeg.
+ */
+app.post('/api/speak', audioLimiter, async (req, res, next) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) throw httpError(500, 'Server is missing OPENAI_API_KEY.');
+
+    const text = cleanText(req.body?.text, MAX_SPEAK_LENGTH);
+    if (!text) {
+      return res.status(400).json({ success: false, message: '"text" must be a non-empty string.' });
+    }
+    const requested = cleanText(req.body?.voice, 30).toLowerCase();
+    const voice = VOICES.includes(requested) ? requested : VOICES.includes(DEFAULT_VOICE) ? DEFAULT_VOICE : 'nova';
+
+    let speech;
+    try {
+      speech = await openai.audio.speech.create({
+        model: TTS_MODEL,
+        voice,
+        input: text,
+        response_format: 'mp3',
+        // "instructions" is only supported by the gpt-4o-*-tts models
+        ...(TTS_MODEL.startsWith('gpt-4o') ? { instructions: TTS_INSTRUCTIONS } : {}),
+      });
+    } catch (err) {
+      throw mapOpenAIError(err, 'speech');
+    }
+
+    const audio = Buffer.from(await speech.arrayBuffer());
+    res.set({
+      'Content-Type': 'audio/mpeg',
+      'Content-Length': String(audio.length),
+      'Cache-Control': 'no-store',
+    });
+    return res.status(200).send(audio);
+  } catch (err) {
+    next(err);
+  }
+});
 
 // ============================================
 // 1) Per-answer check + clarifying questions
@@ -161,6 +325,8 @@ const EVALUATION_SCHEMA = {
 const EVALUATION_PROMPT = `You are Ava, a warm, professional AI interviewer.
 You asked a candidate one question and they answered. The answer text may combine several attempts:
 if you asked a clarifying question earlier, the candidate's follow-up is appended to the earlier answer.
+The answer was usually SPOKEN and transcribed automatically, so ignore small transcription slips, missing
+punctuation and filler words. Judge the meaning, not the typing.
 
 Decide whether the candidate gave a proper answer, then set "proceed".
 
@@ -209,7 +375,7 @@ ATTEMPT LIMIT
  *   "maxAttempts": 2            // optional, default 2
  * }
  */
-app.post('/api/evaluate-answer', async (req, res, next) => {
+app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
   try {
     const category = cleanText(req.body?.category, 100) || 'General';
     const question = cleanText(req.body?.question);
@@ -385,6 +551,8 @@ const ANALYSIS_PROMPT = `You are an expert interview coach and hiring consultant
 You will receive a candidate's interview questions and their answers across areas such as
 Product, Business, AI Fluency, Technology, Marketing and Sales. The first item may be a short introduction.
 Answers may include earlier attempts plus follow-ups made after the interviewer asked a clarifying question.
+Answers were usually spoken and transcribed automatically, so do not penalise minor transcription slips,
+filler words or missing punctuation.
 
 Analyze ONLY what is in the answers. Do not invent experience the candidate did not mention.
 Be specific, honest and constructive. Reference concrete details from the answers as evidence.
@@ -406,7 +574,7 @@ If an answer is very short or vague, say so and score it accordingly.`;
  *   "responses": [ { "category": "Product", "question": "...", "answer": "...", "feedback": {...} } ]
  * }
  */
-app.post('/api/analyze', async (req, res, next) => {
+app.post('/api/analyze', aiLimiter, async (req, res, next) => {
   try {
     const { error, value } = validateInterviewPayload(req.body);
     if (error) {
@@ -455,6 +623,7 @@ app.get('/api/hi', (req, res) => {
     success: true,
     message: 'hi..',
     timestamp: new Date().toISOString(),
+    speech: { stt: STT_MODEL, tts: TTS_MODEL },
   });
 });
 
@@ -480,6 +649,16 @@ app.use((req, res) => {
 // ============================================
 app.use((err, req, res, next) => {
   console.error('Error:', err.stack || err);
+
+  // Upload problems (file too large, unexpected field, ...)
+  if (err && err.name === 'MulterError') {
+    const tooBig = err.code === 'LIMIT_FILE_SIZE';
+    return res.status(tooBig ? 413 : 400).json({
+      success: false,
+      message: tooBig ? 'Audio clip is too large.' : `Upload error: ${err.message}`,
+    });
+  }
+
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Internal Server Error',
