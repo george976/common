@@ -12,38 +12,15 @@ app.set('trust proxy', 1); // correct client IPs behind Render / proxies (used b
 const PORT = process.env.PORT || 3000;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-// Speech settings: ElevenLabs handles BOTH text-to-speech and speech-to-text.
-// (OpenAI is still used for the interview chat/analysis endpoints below.)
-const ELEVEN_BASE = 'https://api.elevenlabs.io';
-const STT_MODEL = process.env.ELEVENLABS_STT_MODEL || 'scribe_v2'; // falls back to 'scribe_v1' automatically
-const TTS_MODEL = process.env.ELEVENLABS_TTS_MODEL || 'eleven_flash_v2_5'; // fast. Or 'eleven_multilingual_v2' for max quality
-const TTS_FORMAT = process.env.ELEVENLABS_TTS_FORMAT || 'mp3_44100_128';
+// Speech settings (all use the SAME OPENAI_API_KEY)
+const STT_MODEL = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe'; // most accurate. Falls back to 'whisper-1' automatically
+const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'tts-1'; // or 'tts-1-hd' / 'gpt-4o-mini-tts'
+const DEFAULT_VOICE = process.env.OPENAI_TTS_VOICE || 'nova';
+const TTS_INSTRUCTIONS =
+  process.env.OPENAI_TTS_INSTRUCTIONS ||
+  'Speak like a warm, professional interviewer: natural pace, friendly and encouraging.';
+const VOICES = ['alloy', 'echo', 'fable', 'nova', 'onyx', 'shimmer'];
 
-// Friendly voice names (sent by the frontend) -> ElevenLabs voice IDs.
-// Any ElevenLabs voice ID from your own library can also be passed directly, or set as the default.
-const VOICES = {
-  sarah: 'EXAVITQu4vr4xnSDxMaL',
-  jessica: 'cgSgspJ2msm6clMCkdW9',
-  laura: 'FGY2WhTYpPnrIDTdsKH5',
-  alice: 'Xb7hH8MSUJpSbSDYk0k2',
-  matilda: 'XrExE9yKIg1WjnnlVkGX',
-  lily: 'pFZP5JQG7iQjIQuC4Bku',
-  george: 'JBFqnCBsd6RMkjVDRZzb',
-  brian: 'nPczCjzI2devNBz1zQrb',
-  daniel: 'onwK4e9ZLuTAKqWW03F9',
-  eric: 'cjVigY5qzO86Huf0OWal',
-};
-const DEFAULT_VOICE = process.env.ELEVENLABS_VOICE_ID || VOICES.sarah;
-const VOICE_SETTINGS = {
-  stability: Number(process.env.ELEVENLABS_STABILITY ?? 0.5),
-  similarity_boost: Number(process.env.ELEVENLABS_SIMILARITY ?? 0.75),
-  style: 0,
-  use_speaker_boost: true,
-};
-
-if (!process.env.ELEVENLABS_API_KEY) {
-  console.warn('⚠️  ELEVENLABS_API_KEY is not set. Voice (speak/transcribe) endpoints will fail until you add it.');
-}
 if (!process.env.OPENAI_API_KEY) {
   console.warn('⚠️  OPENAI_API_KEY is not set. AI endpoints will fail until you add it.');
 }
@@ -189,7 +166,7 @@ async function askOpenAIForJson({ system, user, schema, temperature = 0.3, maxTo
 }
 
 // ============================================
-// 0) Speech: ElevenLabs speech-to-text (Scribe) + text-to-speech
+// 0) Speech: Whisper transcription + OpenAI text-to-speech
 // ============================================
 
 const MIME_TO_EXT = {
@@ -206,49 +183,16 @@ const MIME_TO_EXT = {
   'audio/x-wav': 'wav',
 };
 
-// ElevenLabs accepts ISO 639-1 or 639-3 codes; 3-letter codes are the most reliable for locking a language.
-const LANG_3 = { en: 'eng', es: 'spa', fr: 'fra', de: 'deu', it: 'ita', pt: 'por', hi: 'hin', ja: 'jpn', ko: 'kor', zh: 'zho', ar: 'ara', ru: 'rus', ml: 'mal', ta: 'tam', te: 'tel' };
-
-/** Maps an ElevenLabs HTTP failure to a friendly HTTP error. */
-async function elevenError(response, what) {
-  let detail = '';
-  try {
-    const j = await response.json();
-    const d = j && (j.detail || j.message);
-    detail = typeof d === 'string' ? d : (d && (d.message || d.status)) || JSON.stringify(j);
-  } catch (e) {
-    /* body was not JSON */
-  }
-  detail = String(detail || '').slice(0, 200);
-  console.error(`ElevenLabs ${what} failed (${response.status}): ${detail}`);
-  if (response.status === 401) return httpError(500, 'ElevenLabs authentication failed. Check ELEVENLABS_API_KEY on the server.');
-  if (response.status === 402 || response.status === 429) {
-    return httpError(429, 'ElevenLabs quota or rate limit reached. Please try again shortly.');
-  }
-  if (response.status === 400 || response.status === 404 || response.status === 422) {
-    return httpError(502, `ElevenLabs rejected the ${what} request: ${detail}`);
-  }
-  return httpError(502, 'Could not reach the ElevenLabs service. Please try again.');
-}
-
-async function elevenFetch(url, options, what) {
-  try {
-    return await fetch(url, { ...options, signal: AbortSignal.timeout(50 * 1000) });
-  } catch (err) {
-    console.error(`ElevenLabs ${what} network error:`, err && err.message);
-    throw httpError(502, 'Could not reach the ElevenLabs service. Please try again.');
-  }
-}
-
 /**
  * POST /api/transcribe   (multipart/form-data)
  *   audio:    the recorded clip (webm / mp4 / ogg / wav / mp3)
  *   language: optional ISO-639-1 code, e.g. "en" (improves accuracy and speed)
+ *   prompt:   optional short vocabulary hint (max 200 chars)
  * Returns { success, text, model }
  */
 app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, res, next) => {
   try {
-    if (!process.env.ELEVENLABS_API_KEY) throw httpError(500, 'Server is missing ELEVENLABS_API_KEY.');
+    if (!process.env.OPENAI_API_KEY) throw httpError(500, 'Server is missing OPENAI_API_KEY.');
     if (!req.file || !req.file.buffer || req.file.size < 500) {
       return res.status(400).json({
         success: false,
@@ -256,42 +200,40 @@ app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, re
       });
     }
 
-    const mime = String(req.file.mimetype || '').split(';')[0].toLowerCase() || 'audio/webm';
+    const mime = String(req.file.mimetype || '').split(';')[0].toLowerCase();
     const ext = MIME_TO_EXT[mime] || 'webm';
-    const lang = String(req.body?.language || '').toLowerCase();
-    const languageCode = /^[a-z]{2,3}$/.test(lang) ? LANG_3[lang] || lang : undefined;
+    const language = /^[a-z]{2}$/i.test(String(req.body?.language || '')) ? req.body.language.toLowerCase() : undefined;
+    const prompt = cleanText(req.body?.prompt, 200) || undefined;
 
-    // Try the configured model first; fall back to scribe_v1 if the account can't use it
-    const models = STT_MODEL === 'scribe_v1' ? ['scribe_v1'] : [STT_MODEL, 'scribe_v1'];
+    const file = await OpenAI.toFile(req.file.buffer, `speech.${ext}`, { type: mime || 'audio/webm' });
+
+    // Try the configured model first; fall back to whisper-1 if the account can't use it
+    const models = STT_MODEL === 'whisper-1' ? ['whisper-1'] : [STT_MODEL, 'whisper-1'];
     let result;
     let usedModel = STT_MODEL;
-    let lastResponse;
+    let lastErr;
     for (const m of models) {
-      const form = new FormData();
-      form.append('file', new Blob([req.file.buffer], { type: mime }), `speech.${ext}`);
-      form.append('model_id', m);
-      form.append('tag_audio_events', 'false'); // no "(laughter)" / "(music)" tags in the text
-      form.append('diarize', 'false');
-      if (languageCode) form.append('language_code', languageCode);
-
-      const response = await elevenFetch(
-        `${ELEVEN_BASE}/v1/speech-to-text`,
-        { method: 'POST', headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, body: form },
-        'transcription'
-      );
-      if (response.ok) {
-        result = await response.json();
+      try {
+        result = await openai.audio.transcriptions.create({
+          file,
+          model: m,
+          response_format: 'json',
+          temperature: 0,
+          ...(language ? { language } : {}),
+          ...(prompt ? { prompt } : {}),
+        });
         usedModel = m;
         break;
+      } catch (err) {
+        lastErr = err;
+        if (![400, 403, 404].includes(err && err.status)) break; // only fall back on "model not available"-type errors
+        console.warn(`Transcription with ${m} failed (${err.status}): ${err.message}`);
       }
-      lastResponse = response;
-      if (![400, 403, 404, 422].includes(response.status)) break; // only fall back on "model not available"-type errors
-      console.warn(`Transcription with ${m} failed (${response.status})`);
     }
-    if (!result) throw await elevenError(lastResponse, 'transcription');
+    if (!result) throw mapOpenAIError(lastErr, 'transcription');
+    console.log(`Transcribed ${req.file.size} bytes with ${usedModel}: "${String(result.text || '').slice(0, 80)}"`);
 
-    const text = String(result?.text || '').trim();
-    console.log(`Transcribed ${req.file.size} bytes with ${usedModel}: "${text.slice(0, 80)}"`);
+    const text = (typeof result === 'string' ? result : result?.text || '').trim();
     return res.status(200).json({ success: true, text, model: usedModel });
   } catch (err) {
     next(err);
@@ -300,36 +242,35 @@ app.post('/api/transcribe', audioLimiter, upload.single('audio'), async (req, re
 
 /**
  * POST /api/speak
- * Body: { "text": "...", "voice": "sarah" }   (voice = a name from VOICES, or an ElevenLabs voice ID)
+ * Body: { "text": "...", "voice": "nova" }
  * Returns the spoken audio as audio/mpeg.
  */
 app.post('/api/speak', audioLimiter, async (req, res, next) => {
   try {
-    if (!process.env.ELEVENLABS_API_KEY) throw httpError(500, 'Server is missing ELEVENLABS_API_KEY.');
+    if (!process.env.OPENAI_API_KEY) throw httpError(500, 'Server is missing OPENAI_API_KEY.');
 
     const text = cleanText(req.body?.text, MAX_SPEAK_LENGTH);
     if (!text) {
       return res.status(400).json({ success: false, message: '"text" must be a non-empty string.' });
     }
-    const requested = cleanText(req.body?.voice, 40);
-    const voiceId = VOICES[requested.toLowerCase()] || (/^[A-Za-z0-9]{15,30}$/.test(requested) ? requested : DEFAULT_VOICE);
+    const requested = cleanText(req.body?.voice, 30).toLowerCase();
+    const voice = VOICES.includes(requested) ? requested : VOICES.includes(DEFAULT_VOICE) ? DEFAULT_VOICE : 'nova';
 
-    const response = await elevenFetch(
-      `${ELEVEN_BASE}/v1/text-to-speech/${voiceId}?output_format=${encodeURIComponent(TTS_FORMAT)}`,
-      {
-        method: 'POST',
-        headers: {
-          'xi-api-key': process.env.ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
-          Accept: 'audio/mpeg',
-        },
-        body: JSON.stringify({ text, model_id: TTS_MODEL, voice_settings: VOICE_SETTINGS }),
-      },
-      'speech'
-    );
-    if (!response.ok) throw await elevenError(response, 'speech');
+    let speech;
+    try {
+      speech = await openai.audio.speech.create({
+        model: TTS_MODEL,
+        voice,
+        input: text,
+        response_format: 'mp3',
+        // "instructions" is only supported by the gpt-4o-*-tts models
+        ...(TTS_MODEL.startsWith('gpt-4o') ? { instructions: TTS_INSTRUCTIONS } : {}),
+      });
+    } catch (err) {
+      throw mapOpenAIError(err, 'speech');
+    }
 
-    const audio = Buffer.from(await response.arrayBuffer());
+    const audio = Buffer.from(await speech.arrayBuffer());
     res.set({
       'Content-Type': 'audio/mpeg',
       'Content-Length': String(audio.length),
@@ -413,7 +354,7 @@ GENERAL RULES
   "I may have misheard that" in the comment, and ask them to repeat or rephrase just the unclear part.
 - Never ask the next interview question. Never mention scores. Never invent details the candidate did not say.
 - Ask at most ONE clarifying question, and only for what is actually missing.
-- If the answer is vague but a genuine attempt, set proceed=true and use "comment" to say what extra detail would make it stronger.
+- For area questions, a vague or thin answer gets a follow-up question (see below) until the attempt limit is reached.
 
 WHEN category is "Introduction"
 - A proper introduction includes (1) the candidate's NAME and (2) at least some background or their current role.
@@ -423,13 +364,21 @@ WHEN category is "Introduction"
 - If the intro is complete, proceed=true and greet them warmly by first name in "comment" (max 30 words).
 - Always fill "candidate_name" with the first name when it was stated, otherwise "".
 
-FOR ALL OTHER CATEGORIES
-- proceed=false (and makes_sense=false where relevant) when the answer is gibberish, a refusal or non-answer
-  (e.g. "idk", "ok", "no idea"), clearly off-topic, contradictory, or does not attempt the question.
-  Then ask ONE specific clarifying question that helps them answer, such as asking for a concrete example,
-  their role in it, or what result it had.
-- proceed=true when they genuinely attempt the question, even if imperfectly.
-- When proceed=true, "comment" is 1-2 sentences (max 40 words) that reference something specific from the answer.
+FOR ALL OTHER CATEGORIES (area questions)
+You are gathering enough evidence to judge how well this person actually works in the area. One answer is rarely enough.
+- You receive the candidate's background, the conversation so far in this area, and the current attempt number
+  (the number of follow-ups already asked).
+- If you cannot yet judge their practical ability, set proceed=false and ask ONE specific follow-up in "clarifying_question".
+  At attempt 0, ask a follow-up unless the answer is already exceptionally concrete (a real example, their own role, a decision, a result).
+- Good follow-ups dig into: a concrete example, what THEY did versus the team, a decision and its trade-off, how they measured the result,
+  what they would do differently, or how they would handle a changed situation. Tie the follow-up to their background and to
+  something specific they just said. Never repeat a question that was already asked.
+- Judge practical skill, not vocabulary. If the candidate does not know or does not use a technical term (for example RAG) but describes
+  sound practice, give them credit. Never quiz them on jargon; ask how they would do it in practice instead.
+- Set proceed=true once you have a reasonably clear picture of their depth, or when the attempt limit is reached.
+- If the answer is gibberish, a non-answer (e.g. "idk"), off-topic or contradictory, set proceed=false (makes_sense=false where relevant) and ask
+  ONE helpful question, such as for a concrete example, their role in it, or what result it had.
+- When proceed=true, "comment" is 1-2 sentences (max 40 words) that reference something specific from what they said.
 
 WHEN proceed=false
 - "comment" is a very short, kind reaction (max 15 words) that says what was missing, without scolding.
@@ -455,6 +404,8 @@ app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
     const category = cleanText(req.body?.category, 100) || 'General';
     const question = cleanText(req.body?.question);
     const answer = cleanText(req.body?.answer);
+    const background = cleanText(req.body?.background, 1500);
+    const conversation = cleanText(req.body?.conversation, 6000);
 
     const attemptRaw = Number(req.body?.attempt);
     const maxRaw = Number(req.body?.maxAttempts);
@@ -471,10 +422,12 @@ app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
     const { data, model } = await askOpenAIForJson({
       system: EVALUATION_PROMPT,
       user:
+        (background ? `Candidate background (from their introduction): ${background}\n\n` : '') +
         `Category: ${category}\n` +
         `Current attempt: ${attempt} (maximum clarifications allowed: ${maxAttempts})\n\n` +
         `Question: ${question}\n\n` +
-        `Candidate's answer: ${answer}`,
+        (conversation ? `Conversation so far in this area:\n${conversation}\n\n` : '') +
+        `Candidate's answer (all attempts combined): ${answer}`,
       schema: EVALUATION_SCHEMA,
       temperature: 0.4,
       maxTokens: 300,
@@ -496,6 +449,73 @@ app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
     }
 
     return res.status(200).json({ success: true, model, evaluation: data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ============================================
+// 1b) Tailored question for each area, based on the candidate's background
+// ============================================
+
+const AREA_FOCUS = {
+  Product: 'building, prioritising and shipping products; deciding what to build and what to leave out',
+  Business: 'commercial thinking: revenue, growth, pricing, unit economics and operations',
+  'AI Fluency': 'using AI tools in real work, getting the best out of them and judging when output cannot be trusted',
+  Technology: 'working with engineers and making sound technical decisions as a non-specialist or specialist',
+  Marketing: 'positioning, channels, messaging and launching to an audience',
+  Sales: 'understanding buyers, handling objections, discovery and closing deals',
+};
+
+const PLAN_SCHEMA = {
+  name: 'tailored_question',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['question'],
+    properties: {
+      question: { type: 'string', description: 'One interview question, max 45 words, plain spoken text.' },
+    },
+  },
+};
+
+const PLAN_PROMPT = `You are Ava, an AI interviewer for School of Operators (SOO).
+Write ONE interview question for the given area, tailored to this specific candidate.
+- Use their background: role, industry, experience level and what they want next. Anchor the question in their world
+  (a product, team, tool or situation they mentioned) so it never feels generic.
+- If they have little direct experience in this area, ask about a realistic situation from their own background or a transferable
+  experience (a project, internship, club, side project) instead of a textbook question.
+- Match the difficulty to their experience level. An early-career person gets practical, scenario-based questions, not senior strategy.
+- Ask what they did or what they would do. Never ask for definitions, and do not assume they know jargon; use plain words.
+- Do not repeat earlier questions. You may lightly build on earlier answers, but keep the focus on the area.
+- Max 45 words. It is spoken aloud: plain text, no preamble such as "Next question", no lists, no emojis, exactly one question.`;
+
+app.post('/api/plan-question', aiLimiter, async (req, res, next) => {
+  try {
+    const category = cleanText(req.body?.category, 100);
+    const background = cleanText(req.body?.background, 1500);
+    const name = cleanText(req.body?.candidateName, 100);
+    if (!category) return res.status(400).json({ success: false, message: '"category" is required.' });
+    const previous = Array.isArray(req.body?.previous) ? req.body.previous.slice(-4) : [];
+    const prev = previous
+      .map((p) => `[${cleanText(p && p.category, 60)}] Q: ${cleanText(p && p.question, 400)}\nA: ${cleanText(p && p.answer, 700)}`)
+      .join('\n\n');
+
+    const { data, model } = await askOpenAIForJson({
+      system: PLAN_PROMPT,
+      user:
+        `Area: ${category} (${AREA_FOCUS[category] || 'general professional skills'})\n` +
+        (name ? `Candidate first name: ${name}\n` : '') +
+        `Candidate background (from their introduction): ${background || 'not given'}\n` +
+        (prev ? `\nEarlier questions and answers:\n${prev}\n` : ''),
+      schema: PLAN_SCHEMA,
+      temperature: 0.7,
+      maxTokens: 150,
+    });
+    const question = cleanText(data.question, 400);
+    if (!question) throw httpError(502, 'The AI returned an empty question.');
+    return res.status(200).json({ success: true, model, question });
   } catch (err) {
     next(err);
   }
@@ -543,6 +563,9 @@ function validateInterviewPayload(body) {
       answer,
       note: fb && typeof fb.comment === 'string' ? fb.comment.slice(0, 300) : '',
       makesSense: fb && typeof fb.makes_sense === 'boolean' ? fb.makes_sense : null,
+      turns: Array.isArray(item.turns)
+        ? item.turns.slice(0, 14).map((t) => ({ role: t && t.role === 'ava' ? 'ava' : 'candidate', text: cleanText(t && t.text, 2500) })).filter((t) => t.text)
+        : [],
     });
   }
 
@@ -564,9 +587,21 @@ const ANALYSIS_SCHEMA = {
       'weaknesses',
       'category_scores',
       'recommended_company_types',
+      'profile_snapshot',
+      'development_plan',
     ],
     properties: {
-      overall_score: { type: 'number', description: 'Overall score from 1 to 10' },
+      overall_score: { type: 'number', description: 'Overall score from 1 to 10 (recalculated by the server from the category scores)' },
+      profile_snapshot: { type: 'string', description: 'One or two sentences on who the candidate is and what they want next, in their own terms' },
+      development_plan: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['before_cohort', 'during_cohort'],
+        properties: {
+          before_cohort: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['focus', 'action', 'why'], properties: { focus: { type: 'string' }, action: { type: 'string' }, why: { type: 'string' } } } },
+          during_cohort: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['focus', 'action', 'why'], properties: { focus: { type: 'string' }, action: { type: 'string' }, why: { type: 'string' } } } },
+        },
+      },
       summary: { type: 'string', description: '2-3 sentence overall assessment' },
       strengths: {
         type: 'array',
@@ -611,10 +646,11 @@ const ANALYSIS_SCHEMA = {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['type', 'reason'],
+          required: ['type', 'reason', 'based_on'],
           properties: {
             type: { type: 'string' },
             reason: { type: 'string' },
+            based_on: { type: 'string', description: 'What the candidate said (background, goal or a specific answer) that supports this recommendation' },
           },
         },
       },
@@ -622,23 +658,31 @@ const ANALYSIS_SCHEMA = {
   },
 };
 
-const ANALYSIS_PROMPT = `You are an expert interview coach and hiring consultant.
-You will receive a candidate's interview questions and their answers across areas such as
-Product, Business, AI Fluency, Technology, Marketing and Sales. The first item may be a short introduction.
-Answers may include earlier attempts plus follow-ups made after the interviewer asked a clarifying question.
-Answers were usually spoken and transcribed automatically, so do not penalise minor transcription slips,
-filler words or missing punctuation.
+const ANALYSIS_PROMPT = `You are an expert interview coach and hiring consultant for School of Operators (SOO).
+You will receive a candidate's interview transcript. The first item is their introduction (background, current role, what they want next).
+Each later item is one area (Product, Business, AI Fluency, Technology, Marketing, Sales) with the main question, the candidate's answers and
+any follow-up questions the interviewer asked. Answers were usually spoken and transcribed automatically, so do not penalise minor
+transcription slips, filler words or missing punctuation.
 
-Analyze ONLY what is in the answers. Do not invent experience the candidate did not mention.
-Be specific, honest and constructive. Reference concrete details from the answers as evidence.
-Some answers include an interviewer note; treat answers flagged as not making sense as weak.
+Analyze ONLY what is in the transcript. Do not invent experience the candidate did not mention.
+Be specific, honest and constructive, and cite concrete details from the answers and follow-ups as evidence.
 
-Return:
-- overall_score (1-10) and a short summary
-- 2-5 strengths and 2-5 weaknesses (weaknesses must include an actionable suggestion)
-- a score (1-5) and short comment for each scored category that appears in the answers
-  (do not score the "Introduction" as a category)
-- 2-4 recommended company types the candidate should target, with reasons based on their strongest areas
+SCORING
+- Score each area from 1 to 5 on demonstrated practical ability and quality of reasoning across the whole exchange (answer plus follow-ups),
+  not on vocabulary. A candidate who does not know a term (for example RAG) but describes sound, effective practice should score well.
+- Weigh the candidate's experience level: judge against what is reasonable for their background, but stay honest.
+- Each category comment must say what in the transcript justifies the score, so a reviewer can check it against the transcript.
+- Do not score the "Introduction" as a category. Interviewer flags that an answer did not make sense mean the answer was weak.
+- overall_score will be recalculated from your category scores, so keep it consistent with them (average of the category scores x 2).
+
+OTHER FIELDS
+- profile_snapshot: one or two sentences on who they are and what they want next, using their own words where possible.
+- 2-5 strengths and 2-5 weaknesses (weaknesses include an actionable suggestion).
+- recommended_company_types: 2-4 types of companies or roles to target. Each must be linked to what the candidate actually said: put their
+  background, stated goal or a specific answer in "based_on", and avoid generic advice that would fit anyone.
+- development_plan: 2-4 items for before_cohort (what to prepare, practise or build before the cohort starts) and 2-4 items for during_cohort
+  (what to focus on and practise while on the cohort). Each item has a short "focus", a concrete "action" they can do, and "why" it matters,
+  tied to gaps or goals seen in their answers.
 
 If an answer is very short or vague, say so and score it accordingly.`;
 
@@ -661,7 +705,10 @@ app.post('/api/analyze', aiLimiter, async (req, res, next) => {
         const flag =
           r.makesSense === false ? '\nInterviewer flag: answer did not make sense or was off-topic' : '';
         const note = r.note ? `\nInterviewer note: ${r.note}` : '';
-        return `#${i + 1} [${r.category}]\nQuestion: ${r.question}\nAnswer: ${r.answer}${flag}${note}`;
+        const body = r.turns && r.turns.length
+          ? r.turns.map((t) => `${t.role === 'ava' ? 'Interviewer' : 'Candidate'}: ${t.text}`).join('\n')
+          : `Question: ${r.question}\nAnswer: ${r.answer}`;
+        return `#${i + 1} [${r.category}]\n${body}${flag}${note}`;
       })
       .join('\n\n');
 
@@ -675,6 +722,12 @@ app.post('/api/analyze', aiLimiter, async (req, res, next) => {
       schema: ANALYSIS_SCHEMA,
       temperature: 0.3,
     });
+
+    // Overall score is always the average of the area scores x 2 (so 27/30 = 9.0), never a separate guess.
+    const nums = (data.category_scores || []).map((c) => Number(c.score)).filter((n) => Number.isFinite(n));
+    if (nums.length) {
+      data.overall_score = Math.round((nums.reduce((a, n) => a + n, 0) / (nums.length * 5)) * 100) / 10;
+    }
 
     return res.status(200).json({ success: true, model, analysis: data });
   } catch (err) {
@@ -698,7 +751,7 @@ app.get('/api/hi', (req, res) => {
     success: true,
     message: 'hi..',
     timestamp: new Date().toISOString(),
-    speech: { provider: 'elevenlabs', stt: STT_MODEL, tts: TTS_MODEL, voices: Object.keys(VOICES) },
+    speech: { stt: STT_MODEL, tts: TTS_MODEL },
   });
 });
 
