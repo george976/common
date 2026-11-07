@@ -319,12 +319,12 @@ const EVALUATION_SCHEMA = {
       comment: {
         type: 'string',
         description:
-          'What the interviewer says out loud: a short spoken reaction to the answer. Plain text, no emojis, no new interview question.',
+          'What the interviewer says out loud, spoken directly to the candidate using "I" and "you": a short reaction to the answer. Plain text, no emojis, no new interview question. Never refer to the candidate in the third person.',
       },
       clarifying_question: {
         type: 'string',
         description:
-          'One short, friendly follow-up question asking for what is missing. Empty string when proceed is true.',
+          'One short, friendly follow-up question spoken directly to the candidate ("you"/"your") asking for what is missing. Empty string when proceed is true.',
       },
       candidate_name: {
         type: 'string',
@@ -341,6 +341,16 @@ The answer was usually SPOKEN and transcribed automatically, so ignore small tra
 punctuation and filler words. Judge the meaning, not the typing.
 
 Decide whether the candidate gave a proper answer, then set "proceed".
+
+HOW YOU SPEAK (very important)
+- You are talking TO the candidate, face to face, in a live conversation. You are "I", and the candidate is "you".
+  Always use "you" and "your" ("Thanks for walking me through that, I like how you tested the idea with real users.").
+- NEVER talk about the candidate in the third person. Never say "the candidate", "the interviewee", "the applicant",
+  "he", "she", "they", "them" or "their" about the person you are interviewing, and never use their name as the subject of a
+  sentence about them (wrong: "Sam did a great job explaining the roadmap"; right: "You did a great job explaining the roadmap").
+  Their first name may only be used as a direct greeting or address ("Nice to meet you, Sam.").
+- This applies to "comment" AND "clarifying_question". The notes below are written about "the candidate" only to instruct you;
+  do not copy that wording into what you say.
 
 GENERAL RULES
 - Be natural and conversational. Your words are spoken aloud: plain text, no emojis, no markdown.
@@ -361,7 +371,7 @@ WHEN category is "Introduction"
   What they are looking for next is nice to have but not required.
 - If the NAME is missing, proceed=false and politely ask for their name (and whatever else is missing, in one question).
 - If the name is given but there is no background or current role, proceed=false and ask about their background or current role.
-- If the intro is complete, proceed=true and greet them warmly by first name in "comment" (max 30 words).
+- If the intro is complete, proceed=true and greet them warmly by first name in "comment" (max 30 words), speaking to them as "you".
 - Always fill "candidate_name" with the first name when it was stated, otherwise "".
 
 FOR ALL OTHER CATEGORIES (area questions)
@@ -373,15 +383,17 @@ You are gathering enough evidence to judge how well this person actually works i
 - Good follow-ups dig into: a concrete example, what THEY did versus the team, a decision and its trade-off, how they measured the result,
   what they would do differently, or how they would handle a changed situation. Tie the follow-up to their background and to
   something specific they just said. Never repeat a question that was already asked.
+  Phrase these directly to the person ("What did you personally do versus your team?").
 - Judge practical skill, not vocabulary. If the candidate does not know or does not use a technical term (for example RAG) but describes
   sound practice, give them credit. Never quiz them on jargon; ask how they would do it in practice instead.
 - Set proceed=true once you have a reasonably clear picture of their depth, or when the attempt limit is reached.
 - If the answer is gibberish, a non-answer (e.g. "idk"), off-topic or contradictory, set proceed=false (makes_sense=false where relevant) and ask
   ONE helpful question, such as for a concrete example, their role in it, or what result it had.
-- When proceed=true, "comment" is 1-2 sentences (max 40 words) that reference something specific from what they said.
+- When proceed=true, "comment" is 1-2 sentences (max 40 words) that reference something specific from what they said, spoken to them as "you".
 
 WHEN proceed=false
-- "comment" is a very short, kind reaction (max 15 words) that says what was missing, without scolding.
+- "comment" is a very short, kind reaction (max 15 words) that says what was missing, without scolding
+  (for example "I didn't catch a specific example there." Not: "The candidate gave no example.").
 - "clarifying_question" is the single follow-up question.
 - When proceed=true, "clarifying_question" must be an empty string.
 
@@ -427,7 +439,8 @@ app.post('/api/evaluate-answer', aiLimiter, async (req, res, next) => {
         `Current attempt: ${attempt} (maximum clarifications allowed: ${maxAttempts})\n\n` +
         `Question: ${question}\n\n` +
         (conversation ? `Conversation so far in this area:\n${conversation}\n\n` : '') +
-        `Candidate's answer (all attempts combined): ${answer}`,
+        `Candidate's answer (all attempts combined): ${answer}\n\n` +
+        `Reminder: speak directly to the candidate as "you" (never "the candidate", "he", "she" or "they").`,
       schema: EVALUATION_SCHEMA,
       temperature: 0.4,
       maxTokens: 300,
@@ -475,13 +488,15 @@ const PLAN_SCHEMA = {
     additionalProperties: false,
     required: ['question'],
     properties: {
-      question: { type: 'string', description: 'One interview question, max 45 words, plain spoken text.' },
+      question: { type: 'string', description: 'One interview question spoken directly to the candidate ("you"/"your"), max 45 words, plain spoken text.' },
     },
   },
 };
 
 const PLAN_PROMPT = `You are Ava, an AI interviewer for School of Operators (SOO).
 Write ONE interview question for the given area, tailored to this specific candidate.
+- You are speaking directly TO the candidate. Address them as "you" and "your" ("Tell me about a time you..."),
+  never in the third person ("the candidate", "he", "she", "they").
 - Use their background: role, industry, experience level and what they want next. Anchor the question in their world
   (a product, team, tool or situation they mentioned) so it never feels generic.
 - If they have little direct experience in this area, ask about a realistic situation from their own background or a transferable
@@ -506,9 +521,10 @@ app.post('/api/plan-question', aiLimiter, async (req, res, next) => {
       system: PLAN_PROMPT,
       user:
         `Area: ${category} (${AREA_FOCUS[category] || 'general professional skills'})\n` +
-        (name ? `Candidate first name: ${name}\n` : '') +
+        (name ? `Candidate first name (for your information only, do not use it as the subject of the question): ${name}\n` : '') +
         `Candidate background (from their introduction): ${background || 'not given'}\n` +
-        (prev ? `\nEarlier questions and answers:\n${prev}\n` : ''),
+        (prev ? `\nEarlier questions and answers:\n${prev}\n` : '') +
+        `\nWrite the question directly to the candidate, using "you".`,
       schema: PLAN_SCHEMA,
       temperature: 0.7,
       maxTokens: 150,
@@ -574,6 +590,21 @@ function validateInterviewPayload(body) {
   return { value: { candidateName: name, responses: cleaned } };
 }
 
+// The cohort's value propositions. The analysis maps each gap to the ones that genuinely address it.
+const VALUE_PROPS = [
+  { id: 1, title: 'A clear path into startup roles', detail: 'For people who want to work in a startup but do not know how to get in. Positions graduates for roles like Founder Office, Product Manager, Program Manager, Category Lead, P&L Lead and GTM Lead.' },
+  { id: 2, title: 'Learn by doing, not just listening', detail: 'Every concept is paired with a real startup problem solved as you go, so you build actual work rather than just theory.' },
+  { id: 3, title: 'Structured 10-week curriculum across the startup lifecycle', detail: 'Ten concepts over ten weeks: Pre-PMF, PMF, Post-PMF scale, GTM, roadmaps and artefacts, UX and communication, MVP, and interview prep.' },
+  { id: 4, title: 'Live mentorship from an experienced operator', detail: 'Weekly live sessions with Kushagra Mohan (Head of Product at Loylty Rewardz, ex-Leap, founding PM at CasaOne and Multibhashi).' },
+  { id: 5, title: 'A portfolio piece, not just a certificate', detail: 'You produce tangible artefacts (problem brief, user research, GTM proposal, product brief, UX walkthrough, MVP, final presentation) that founders and engineers actually use.' },
+  { id: 6, title: 'Direct exposure and networking with startups', detail: 'You work on a real startup\'s problem statement and present your solution to that startup, which often becomes an introduction to a potential employer.' },
+  { id: 7, title: 'Training for the roles that "run things"', detail: 'Explicitly for people who want to run things at a startup, not just work at one.' },
+  { id: 8, title: 'Selective, hands-on, and low-commitment to explore', detail: 'A selective, hands-on programme with a free 20-minute discovery call to decide whether it is the right move before committing.' },
+  { id: 9, title: 'Interview and positioning support', detail: 'Interview prep, positioning your work, and founder intros to help convert the experience into a job.' },
+  { id: 10, title: 'Accessible price point', detail: 'Priced at ₹30,000 with limited seats, positioned as an investable step into startup careers.' },
+];
+const VALUE_PROP_BY_ID = new Map(VALUE_PROPS.map((v) => [v.id, v]));
+
 const ANALYSIS_SCHEMA = {
   name: 'interview_analysis',
   strict: true,
@@ -592,17 +623,30 @@ const ANALYSIS_SCHEMA = {
     ],
     properties: {
       overall_score: { type: 'number', description: 'Overall score from 1 to 10 (recalculated by the server from the category scores)' },
-      profile_snapshot: { type: 'string', description: 'One or two sentences on who the candidate is and what they want next, in their own terms' },
+      profile_snapshot: { type: 'string', description: 'One or two sentences addressed to the candidate ("you") on who they are and what they want next, in their own terms' },
       development_plan: {
         type: 'object',
         additionalProperties: false,
         required: ['before_cohort', 'during_cohort'],
         properties: {
           before_cohort: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['focus', 'action', 'why'], properties: { focus: { type: 'string' }, action: { type: 'string' }, why: { type: 'string' } } } },
-          during_cohort: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['focus', 'action', 'why'], properties: { focus: { type: 'string' }, action: { type: 'string' }, why: { type: 'string' } } } },
+          during_cohort: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['focus', 'action', 'why', 'value_prop_id'],
+              properties: {
+                focus: { type: 'string' },
+                action: { type: 'string' },
+                why: { type: 'string' },
+                value_prop_id: { type: 'integer', enum: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], description: 'The cohort value proposition (1-10) this action draws on' },
+              },
+            },
+          },
         },
       },
-      summary: { type: 'string', description: '2-3 sentence overall assessment' },
+      summary: { type: 'string', description: '2-3 sentence overall assessment, written directly to the candidate in second person ("you")' },
       strengths: {
         type: 'array',
         items: {
@@ -611,7 +655,7 @@ const ANALYSIS_SCHEMA = {
           required: ['area', 'evidence'],
           properties: {
             area: { type: 'string' },
-            evidence: { type: 'string', description: 'What in the answers shows this strength' },
+            evidence: { type: 'string', description: 'What in your answers shows this strength (second person)' },
           },
         },
       },
@@ -620,11 +664,24 @@ const ANALYSIS_SCHEMA = {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['area', 'evidence', 'suggestion'],
+          required: ['area', 'evidence', 'suggestion', 'cohort_support'],
           properties: {
             area: { type: 'string' },
-            evidence: { type: 'string', description: 'What in the answers shows this gap' },
-            suggestion: { type: 'string', description: 'A concrete way to improve' },
+            evidence: { type: 'string', description: 'What in your answers shows this gap (second person)' },
+            suggestion: { type: 'string', description: 'A concrete way for you to improve (second person)' },
+            cohort_support: {
+              type: 'array',
+              description: '0-2 cohort value propositions that genuinely address this gap. Empty array if none fits honestly.',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['value_prop_id', 'how_it_helps'],
+                properties: {
+                  value_prop_id: { type: 'integer', enum: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+                  how_it_helps: { type: 'string', description: 'One or two sentences, in second person, on how this part of the cohort closes this specific gap' },
+                },
+              },
+            },
           },
         },
       },
@@ -637,7 +694,7 @@ const ANALYSIS_SCHEMA = {
           properties: {
             category: { type: 'string' },
             score: { type: 'number', description: 'Score from 1 to 5' },
-            comment: { type: 'string' },
+            comment: { type: 'string', description: 'Why this score, written to the candidate in second person ("you")' },
           },
         },
       },
@@ -649,8 +706,8 @@ const ANALYSIS_SCHEMA = {
           required: ['type', 'reason', 'based_on'],
           properties: {
             type: { type: 'string' },
-            reason: { type: 'string' },
-            based_on: { type: 'string', description: 'What the candidate said (background, goal or a specific answer) that supports this recommendation' },
+            reason: { type: 'string', description: 'Why this fits you (second person)' },
+            based_on: { type: 'string', description: 'What you said (background, goal or a specific answer) that supports this recommendation, in second person' },
           },
         },
       },
@@ -664,6 +721,15 @@ Each later item is one area (Product, Business, AI Fluency, Technology, Marketin
 any follow-up questions the interviewer asked. Answers were usually spoken and transcribed automatically, so do not penalise minor
 transcription slips, filler words or missing punctuation.
 
+VOICE (very important)
+- The report is shown directly to the candidate, so write EVERYTHING in it TO them, in second person: "you", "your".
+  Examples: "You gave a clear example of prioritising by impact.", "Your answer on pricing stayed fairly general.",
+  "Practise quantifying the results you achieve."
+- NEVER write about them in the third person. Do not use "the candidate", "the interviewee", "he", "she", "they", "them", "their",
+  and do not use their name as the subject of a sentence (wrong: "Sam showed strong product sense"; right: "You showed strong product sense").
+- The transcript labels the speakers "Interviewer" and "Candidate" for your reference only. Do not copy those labels into the report.
+- Write "the interviewer" only when you really must refer to Ava's follow-up questions, otherwise use "I" or just describe what you said.
+
 Analyze ONLY what is in the transcript. Do not invent experience the candidate did not mention.
 Be specific, honest and constructive, and cite concrete details from the answers and follow-ups as evidence.
 
@@ -676,13 +742,31 @@ SCORING
 - overall_score will be recalculated from your category scores, so keep it consistent with them (average of the category scores x 2).
 
 OTHER FIELDS
-- profile_snapshot: one or two sentences on who they are and what they want next, using their own words where possible.
+- profile_snapshot: one or two sentences telling the candidate who they are and what they want next ("You are a ... looking for ..."),
+  using their own words where possible.
 - 2-5 strengths and 2-5 weaknesses (weaknesses include an actionable suggestion).
 - recommended_company_types: 2-4 types of companies or roles to target. Each must be linked to what the candidate actually said: put their
   background, stated goal or a specific answer in "based_on", and avoid generic advice that would fit anyone.
 - development_plan: 2-4 items for before_cohort (what to prepare, practise or build before the cohort starts) and 2-4 items for during_cohort
   (what to focus on and practise while on the cohort). Each item has a short "focus", a concrete "action" they can do, and "why" it matters,
-  tied to gaps or goals seen in their answers.
+  tied to gaps or goals seen in their answers. Phrase each action as advice to them ("Write up two case studies of...").
+
+COHORT MAPPING (make the report actionable)
+The candidate is being considered for the School of Operators cohort. These are its value propositions:
+${VALUE_PROPS.map((v) => `${v.id}. ${v.title}: ${v.detail}`).join('\n')}
+
+- For EVERY weakness, fill "cohort_support" with 0-2 value propositions (by id) that genuinely address that specific gap, and in
+  "how_it_helps" explain, in second person, how that part of the cohort closes the gap ("Weekly sessions with an operator will let you
+  pressure-test your prioritisation calls", "The GTM proposal artefact gives you a place to practise the positioning you struggled with").
+  Tie each mapping to the actual gap and to the week, artefact or session that fits it. Do not just repeat the value proposition.
+- Typical fits: thin product or business answers -> 2, 3, 5; weak storytelling, positioning or interviewing -> 5, 9; lack of real-world
+  exposure or network -> 6; unclear on how to break into startups or which role to aim for -> 1, 7; needs feedback and judgement -> 4.
+  Value propositions 8 and 10 are about commitment and price, so use them only when the transcript raises doubt, cost or readiness.
+- Only claim what the value propositions actually say. Never invent features, outcomes, hiring guarantees, mentors, companies or numbers.
+  If no value proposition honestly fits a gap, return an empty "cohort_support" array rather than forcing a match.
+- Every during_cohort item must set "value_prop_id" to the one value proposition it draws on, and its "action" should name the concrete
+  part of the programme (for example the relevant artefact, a weekly session, or the startup problem statement).
+- Across the whole report, spread the mappings sensibly; do not map every gap to the same value proposition.
 
 If an answer is very short or vague, say so and score it accordingly.`;
 
@@ -713,8 +797,9 @@ app.post('/api/analyze', aiLimiter, async (req, res, next) => {
       .join('\n\n');
 
     const user =
-      (value.candidateName ? `Candidate: ${value.candidateName}\n\n` : '') +
-      `Interview transcript:\n\n${transcript}`;
+      (value.candidateName ? `Candidate's first name (use it at most once, as a direct address): ${value.candidateName}\n\n` : '') +
+      `Interview transcript:\n\n${transcript}\n\n` +
+      `Reminder: write the whole report directly to the candidate in second person ("you", "your"), never in the third person.`;
 
     const { data, model } = await askOpenAIForJson({
       system: ANALYSIS_PROMPT,
@@ -727,6 +812,24 @@ app.post('/api/analyze', aiLimiter, async (req, res, next) => {
     const nums = (data.category_scores || []).map((c) => Number(c.score)).filter((n) => Number.isFinite(n));
     if (nums.length) {
       data.overall_score = Math.round((nums.reduce((a, n) => a + n, 0) / (nums.length * 5)) * 100) / 10;
+    }
+
+    // Attach the real value proposition titles (never trust the model to spell them) and drop invalid or duplicate ids.
+    for (const w of data.weaknesses || []) {
+      const seen = new Set();
+      w.cohort_support = (Array.isArray(w.cohort_support) ? w.cohort_support : [])
+        .filter((c) => VALUE_PROP_BY_ID.has(Number(c.value_prop_id)) && !seen.has(Number(c.value_prop_id)) && seen.add(Number(c.value_prop_id)))
+        .slice(0, 2)
+        .map((c) => ({
+          value_prop_id: Number(c.value_prop_id),
+          value_prop_title: VALUE_PROP_BY_ID.get(Number(c.value_prop_id)).title,
+          how_it_helps: cleanText(c.how_it_helps, 600),
+        }));
+    }
+    const dp = data.development_plan || {};
+    for (const item of dp.during_cohort || []) {
+      const vp = VALUE_PROP_BY_ID.get(Number(item.value_prop_id));
+      item.value_prop_title = vp ? vp.title : '';
     }
 
     return res.status(200).json({ success: true, model, analysis: data });
